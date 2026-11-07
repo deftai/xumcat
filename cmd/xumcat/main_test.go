@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -150,7 +151,7 @@ func TestPing(t *testing.T) {
 	require.NoError(t, pingLoop(context.Background(), s, 2, time.Millisecond, &out))
 	assert.Equal(t, 3, strings.Count(out.String(), "\n"))
 	assert.Contains(t, out.String(), "2 sent, 0 lost")
-	assert.ErrorContains(t, ping(context.Background(), nil), "usage")
+	assert.ErrorContains(t, ping(context.Background(), nil), "need one XUMUX-URL")
 	assert.NoError(t, ping(context.Background(), []string{url, "-c", "1"}))
 }
 
@@ -163,4 +164,32 @@ func TestVersionAndHelpers(t *testing.T) {
 	c := common{tokenFile: "/does/not/exist"}
 	_, err := c.loadToken()
 	assert.Error(t, err)
+}
+
+func TestUsageErrorsAndHelp(t *testing.T) {
+	ctx := context.Background()
+	var stderr bytes.Buffer
+	code := func(err error) int { stderr.Reset(); return exitCode(err, &stderr) }
+
+	assert.Equal(t, 0, code(nil))
+	assert.Equal(t, 0, code(run([]string{"-h"})), "help is not an error")
+	assert.Equal(t, 0, code(run([]string{"--help"})))
+	assert.Equal(t, 0, code(run([]string{"help"})))
+	assert.Equal(t, 0, code(run([]string{"help", "serve"})))
+	assert.Equal(t, 0, code(run([]string{"serve", "-h"})))
+	assert.Equal(t, 0, code(run([]string{"ping", "-h"})))
+	assert.Empty(t, stderr.String())
+
+	assert.Equal(t, 2, code(relay(ctx, []string{"-bogus"})))
+	assert.Equal(t, "xumcat: flag provided but not defined: -bogus\nRun 'xumcat -h' for help.\n", stderr.String())
+	assert.Equal(t, 2, code(serve(ctx, []string{"-nope"})))
+	assert.Contains(t, stderr.String(), "Run 'xumcat serve -h' for help.")
+	assert.Equal(t, 2, code(relay(ctx, []string{"stdio"})))
+	assert.Contains(t, stderr.String(), "need an ENDPOINT and a XUMUX-URL")
+	assert.Equal(t, 2, code(run([]string{"help", "nope"})))
+	assert.Equal(t, 2, code(run([]string{"help", "a", "b"})))
+	assert.Equal(t, 2, code(relay(ctx, nil)), "no arguments shows the usage")
+
+	assert.Equal(t, 1, code(errors.New("connection refused")))
+	assert.Equal(t, "xumcat: connection refused\n", stderr.String())
 }

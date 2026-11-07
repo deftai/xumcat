@@ -29,31 +29,67 @@ var version = "dev"
 const usage = `xumcat — relay byte streams over xumux
 
 Usage:
-  xumcat [flags] ENDPOINT XUMUX-URL     connect ENDPOINT to a pipe/1 channel
-  xumcat serve [flags] XUMUX-URL...     answer pipe/1 channels
-  xumcat ping [flags] XUMUX-URL         measure round-trip time
+  xumcat [flags] ENDPOINT XUMUX-URL    connect ENDPOINT to a pipe/1 channel
+  xumcat serve [flags] XUMUX-URL...    answer pipe/1 channels
+  xumcat ping [flags] XUMUX-URL        measure round-trip time
   xumcat version
+  xumcat help [serve|ping]
+
+ENDPOINT and XUMUX-URL may come in either order; flags may come anywhere.
 
 Endpoints (pipe/1 addresses):
-  tcp:HOST:PORT  tls:HOST:PORT  unix:PATH  stdio  exec:COMMAND
-  tcp-listen:[HOST:]PORT  unix-listen:PATH   (one channel per accepted connection)
+  tcp:HOST:PORT   tls:HOST:PORT   unix:PATH   stdio   exec:COMMAND
+  tcp-listen:[HOST:]PORT   unix-listen:PATH
+                  listen; each accepted connection gets its own channel
 
 xumux URLs:
-  ws://HOST:PORT/PATH  wss://…  tcp+xumux://HOST:PORT  tls+xumux://HOST:PORT
-  unix+xumux:PATH  stdio+xumux  exec+xumux:COMMAND
+  ws://HOST:PORT/PATH   wss://HOST:PORT/PATH
+  tcp+xumux://HOST:PORT   tls+xumux://HOST:PORT   unix+xumux:PATH
+  stdio+xumux             exec+xumux:COMMAND
 
 Examples:
-  xumcat serve tcp+xumux://:7000 -allow 'tcp:localhost:*'
-  xumcat stdio tcp+xumux://server:7000 -t tcp:localhost:22
-  xumcat tcp-listen:8080 exec+xumux:'ssh host xumcat serve stdio+xumux -allow tcp:localhost:80' -t tcp:localhost:80
+  # Server: allow channels to local SSH only, require a token.
+  xumcat serve tls+xumux://:7000 -allow tcp:localhost:22 \
+      -token-file /etc/xumcat.token -tls-cert cert.pem -tls-key key.pem
 
-Run 'xumcat serve -h' or 'xumcat ping -h' for their flags.
+  # Client: SSH through it.
+  ssh -o ProxyCommand='xumcat stdio tls+xumux://server:7000 \
+      -t tcp:localhost:22 -token-file ~/.xumcat.token' server
+
+  # Forward local port 5432 to a host you can reach over SSH; no listener.
+  xumcat tcp-listen:5432 -t tcp:localhost:5432 \
+      exec+xumux:'ssh db xumcat serve stdio+xumux -allow tcp:localhost:5432'
+
+Relay flags:
 `
 
 func main() {
-	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "xumcat:", err)
-		os.Exit(1)
+	os.Exit(exitCode(run(os.Args[1:]), os.Stderr))
+}
+
+// usageError is a mistake in the command line. Its message (if any) is printed
+// with a pointer to the help, and xumcat exits with status 2.
+type usageError struct{ msg, help string }
+
+func (e *usageError) Error() string { return e.msg }
+
+func badUsage(help, format string, args ...any) error {
+	return &usageError{msg: fmt.Sprintf(format, args...), help: help}
+}
+
+func exitCode(err error, stderr io.Writer) int {
+	var ue *usageError
+	switch {
+	case err == nil, errors.Is(err, flag.ErrHelp):
+		return 0
+	case errors.As(err, &ue):
+		if ue.msg != "" {
+			fmt.Fprintf(stderr, "xumcat: %s\nRun '%s' for help.\n", ue.msg, ue.help)
+		}
+		return 2
+	default:
+		fmt.Fprintln(stderr, "xumcat:", err)
+		return 1
 	}
 }
 
@@ -66,6 +102,8 @@ func run(args []string) error {
 			return serve(ctx, args[1:])
 		case "ping":
 			return ping(ctx, args[1:])
+		case "help":
+			return help(ctx, args[1:])
 		case "version", "-version", "--version":
 			fmt.Println("xumcat", version, "xumux", fmt.Sprintf("%d.%d.%d", xumux.Version[0], xumux.Version[1], xumux.Version[2]))
 			return nil
@@ -74,12 +112,36 @@ func run(args []string) error {
 	return relay(ctx, args)
 }
 
+// help prints the help for xumcat or one of its commands.
+func help(ctx context.Context, args []string) error {
+	if len(args) > 1 {
+		return badUsage("xumcat -h", "usage: xumcat help [serve|ping]")
+	}
+	if len(args) == 1 {
+		switch args[0] {
+		case "serve", "ping":
+			return run([]string{args[0], "-h"})
+		default:
+			return badUsage("xumcat -h", "no help for %q", args[0])
+		}
+	}
+	return relay(ctx, []string{"-h"})
+}
+
 // parseInterspersed lets flags appear before, between or after positional args.
+// Help (-h) goes to stdout and returns flag.ErrHelp; a bad flag becomes a
+// usageError.
 func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
+	var out strings.Builder
+	fs.SetOutput(&out)
 	var pos []string
 	for {
 		if err := fs.Parse(args); err != nil {
-			return nil, err
+			if errors.Is(err, flag.ErrHelp) {
+				fmt.Fprint(os.Stdout, out.String())
+				return nil, err
+			}
+			return nil, badUsage(fs.Name()+" -h", "%v", err)
 		}
 		if fs.NArg() == 0 {
 			return pos, nil
@@ -125,10 +187,10 @@ func (c *common) logf(format string, args ...any) {
 
 func relay(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("xumcat", flag.ContinueOnError)
-	fs.Usage = func() { fmt.Fprint(os.Stderr, usage); fs.PrintDefaults() }
+	fs.Usage = func() { fmt.Fprint(fs.Output(), usage); fs.PrintDefaults() }
 	var c common
 	c.register(fs)
-	target := fs.String("t", "", "endpoint the server connects the channel to (default: the server's -default)")
+	target := fs.String("t", "", "target for the server to connect the channel to (default: its -default)")
 	name := fs.String("name", "pipe", "channel name")
 	fs.BoolVar(&c.insecure, "insecure", false, "skip TLS certificate verification")
 	fs.BoolVar(&c.plaintextAuth, "plaintext-auth", false, "allow sending the token over an unencrypted transport")
@@ -136,9 +198,13 @@ func relay(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if len(pos) != 2 {
+	if len(args) == 0 {
+		fs.SetOutput(os.Stderr)
 		fs.Usage()
-		return errors.New("need an ENDPOINT and a XUMUX-URL")
+		return &usageError{}
+	}
+	if len(pos) != 2 {
+		return badUsage("xumcat -h", "need an ENDPOINT and a XUMUX-URL, got %d argument(s)", len(pos))
 	}
 	local, remote := pos[0], pos[1]
 	if transport.IsURL(local) && !transport.IsURL(remote) {
@@ -262,17 +328,45 @@ func pipeOne(ctx context.Context, s *xumux.Session, conn endpoint.Conn, name, ta
 
 // ─── serve ──────────────────────────────────────────────────────────────────
 
+const serveUsage = `Usage: xumcat serve [flags] XUMUX-URL...
+
+Listens on each XUMUX-URL (stdio+xumux serves the one connection on
+stdin/stdout) and answers pipe/1 channels by connecting them to their
+target. Targets must match an -allow pattern; there is no default allow-all.
+
+Patterns are endpoint addresses with * and ? wildcards, matched within one
+path segment: tcp:localhost:*  tcp:10.0.0.?:22  unix:/run/app/*.sock
+
+Examples:
+  xumcat serve wss://:8443/xumux -allow 'tcp:localhost:*' \
+      -token-file /etc/xumcat.token -tls-cert cert.pem -tls-key key.pem
+  xumcat serve stdio+xumux -default tcp:localhost:5432
+
+Flags:
+`
+
+const pingUsage = `Usage: xumcat ping [flags] XUMUX-URL
+
+Sends probes on the control channel and prints each round-trip time, then
+loss, SRTT and RTTVAR (RFC 6298).
+
+Example:
+  xumcat ping wss://server/xumux -c 10 -i 200ms
+
+Flags:
+`
+
 func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("xumcat serve", flag.ContinueOnError)
 	var c common
 	c.register(fs)
 	var allow stringList
-	fs.Var(&allow, "allow", "allow targets matching this endpoint pattern, e.g. 'tcp:localhost:*' (repeatable)")
+	fs.Var(&allow, "allow", "allow targets matching `PATTERN`, e.g. 'tcp:localhost:*' (repeatable)")
 	def := fs.String("default", "", "target for channels that name none")
 	cert := fs.String("tls-cert", "", "certificate file for wss:// and tls+xumux:// listeners")
 	key := fs.String("tls-key", "", "key file for wss:// and tls+xumux:// listeners")
 	fs.Usage = func() {
-		fmt.Fprint(os.Stderr, "Usage: xumcat serve [flags] XUMUX-URL...\n\nAnswers pipe/1 channels by connecting them to allowed targets.\n\n")
+		fmt.Fprint(fs.Output(), serveUsage)
 		fs.PrintDefaults()
 	}
 	urls, err := parseInterspersed(fs, args)
@@ -280,14 +374,13 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(urls) == 0 {
-		fs.Usage()
-		return errors.New("need at least one XUMUX-URL to listen on")
+		return badUsage("xumcat serve -h", "need at least one XUMUX-URL to listen on")
 	}
 	if *def != "" {
 		allow = append(allow, *def)
 	}
 	if len(allow) == 0 {
-		return errors.New("no targets allowed: pass -allow PATTERN (and/or -default ADDR)")
+		return badUsage("xumcat serve -h", "no targets allowed: pass -allow PATTERN (and/or -default ADDR)")
 	}
 	token, err := c.loadToken()
 	if err != nil {
@@ -359,12 +452,16 @@ func ping(ctx context.Context, args []string) error {
 	fs.BoolVar(&c.insecure, "insecure", false, "skip TLS certificate verification")
 	count := fs.Int("c", 4, "number of pings (0 = until interrupted)")
 	interval := fs.Duration("i", time.Second, "interval between pings")
+	fs.Usage = func() {
+		fmt.Fprint(fs.Output(), pingUsage)
+		fs.PrintDefaults()
+	}
 	pos, err := parseInterspersed(fs, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 1 {
-		return errors.New("usage: xumcat ping [flags] XUMUX-URL")
+		return badUsage("xumcat ping -h", "need one XUMUX-URL, got %d argument(s)", len(pos))
 	}
 	token, err := c.loadToken()
 	if err != nil {
