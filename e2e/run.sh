@@ -17,7 +17,7 @@ for s in ${selected[*]}; do
   case " $SCENARIOS " in *" $s "*) ;; *) echo "unknown scenario '$s' (want: $SCENARIOS)"; exit 2;; esac
 done
 
-PY="python3 -I $HERE/helpers.py"
+PY=(python3 -I "$HERE/helpers.py")  # an array, so a path with spaces stays one word
 TOKEN=s3cret
 WORK=$(mktemp -d)
 cd "$WORK"
@@ -51,7 +51,7 @@ echo "xumcat: $("$X" version)   work dir: $WORK"
 
 # Targets, and the shared server every scenario uses.
 ALLOW=(-allow 'tcp:127.0.0.1:*' -allow 'exec:wc -c' -allow 'exec:yes' -token "$TOKEN")
-bg $PY echo 17001
+bg "${PY[@]}" echo 17001
 bg python3 -I -m http.server 17002 --bind 127.0.0.1 -d . >/dev/null 2>&1
 bg "$X" serve tcp+xumux://127.0.0.1:17101 tls+xumux://127.0.0.1:17102 ws://127.0.0.1:17103/x \
   wss://127.0.0.1:17104/x unix+xumux:x.sock "${ALLOW[@]}" -tls-cert cert.pem -tls-key key.pem 2>serve.log
@@ -61,7 +61,7 @@ for p in 17001 17002 17101 17102 17103 17104; do waitport $p || exit 1; done
 scenario_transports() {
   echo "== $MB MB round trip through an echo target, per transport (sha256 checked)"
   for url in tcp+xumux://127.0.0.1:17101 tls+xumux://127.0.0.1:17102 ws://127.0.0.1:17103/x wss://127.0.0.1:17104/x unix+xumux:x.sock \
-             "exec+xumux:$X serve stdio+xumux -allow tcp:127.0.0.1:17001"; do
+             "exec+xumux:'$X' serve stdio+xumux -allow tcp:127.0.0.1:17001"; do
     flags=(-t tcp:127.0.0.1:17001)
     case "$url" in exec*) ;; *) flags+=(-token "$TOKEN");; esac
     case "$url" in tls*|wss*) flags+=(-insecure);; esac
@@ -85,8 +85,8 @@ scenario_forward() {
   echo "== port forwarding: one xumux connection, one channel per TCP connection"
   bg "$X" tcp-listen:127.0.0.1:17201 tcp+xumux://127.0.0.1:17101 -t tcp:127.0.0.1:17001 -token $TOKEN 2>fwd.log
   waitport 17201 || return
-  r=$(t 120 $PY fanout 17201 100 200000); check "${r%% *}" 100/100 "100 concurrent 200 kB echo round trips ($r)"
-  r=$(t 120 $PY fanout 17201 500 1000); check "${r%% *}" 500/500 "500 concurrent short connections ($r)"
+  r=$(t 120 "${PY[@]}" fanout 17201 100 200000); check "${r%% *}" 100/100 "100 concurrent 200 kB echo round trips ($r)"
+  r=$(t 120 "${PY[@]}" fanout 17201 500 1000); check "${r%% *}" 500/500 "500 concurrent short connections ($r)"
   bg "$X" tcp-listen:127.0.0.1:17202 tcp+xumux://127.0.0.1:17101 -t tcp:127.0.0.1:17002 -token $TOKEN 2>fwd2.log
   waitport 17202 || return
   got=$(curl -s --max-time 120 http://127.0.0.1:17202/big.bin | sha256)
@@ -99,18 +99,20 @@ scenario_forward() {
 
 scenario_flowcontrol() {
   echo "== a stalled channel: bounded buffering on both ends"
-  # Channel A: an endless 'yes' stream into a reader that stalls for 6 s.
+  # Channel A: an endless 'yes' stream into a reader that stalls for 12 s.
   bg "$X" tcp-listen:127.0.0.1:17301 tcp+xumux://127.0.0.1:17101 -t 'exec:yes' -token $TOKEN 2>fc.log; fwd=$!
   bg "$X" tcp-listen:127.0.0.1:17302 tcp+xumux://127.0.0.1:17101 -t tcp:127.0.0.1:17002 -token $TOKEN 2>fc2.log
   waitport 17301 && waitport 17302 || return
   srv0=$(rss_mb $SERVER); fwd0=$(rss_mb $fwd)
   echo "        before: server RSS $srv0 MB, forwarder RSS $fwd0 MB"
-  t 30 $PY stall 17301 6 > stall.out & spid=$!
+  t 40 "${PY[@]}" stall 17301 12 > stall.out & spid=$!
   sleep 1
   got=$(curl -s --max-time 120 http://127.0.0.1:17302/big.bin | sha256)
   check "$got" "$SUM" "$MB MB transfer completes while a 'yes' channel is stalled"
   sleep 2
   srv1=$(rss_mb $SERVER); fwd1=$(rss_mb $fwd)
+  # The samples only mean something if the reader was still stalled when they were taken.
+  if kill -0 $spid 2>/dev/null; then ok "memory sampled while the reader was still stalled"; else no "the stall ended before memory was sampled (slow runner?)"; fi
   wait $spid
   queued=$(cat stall.out)
   # Credit bounds what can pile up: the window plus socket buffers.
