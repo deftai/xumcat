@@ -26,6 +26,12 @@ import (
 
 var version = "dev"
 
+// Help and usage output; tests replace these.
+var (
+	stdout io.Writer = os.Stdout
+	stderr io.Writer = os.Stderr
+)
+
 const usage = `xumcat — relay byte streams over xumux
 
 Usage:
@@ -64,7 +70,7 @@ Relay flags:
 `
 
 func main() {
-	os.Exit(exitCode(run(os.Args[1:]), os.Stderr))
+	os.Exit(exitCode(run(os.Args[1:]), stderr))
 }
 
 // usageError is a mistake in the command line. Its message (if any) is printed
@@ -138,7 +144,7 @@ func parseInterspersed(fs *flag.FlagSet, args []string) ([]string, error) {
 	for {
 		if err := fs.Parse(args); err != nil {
 			if errors.Is(err, flag.ErrHelp) {
-				fmt.Fprint(os.Stdout, out.String())
+				fmt.Fprint(stdout, out.String())
 				return nil, err
 			}
 			return nil, badUsage(fs.Name()+" -h", "%v", err)
@@ -199,7 +205,7 @@ func relay(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(args) == 0 {
-		fs.SetOutput(os.Stderr)
+		fs.SetOutput(stderr)
 		fs.Usage()
 		return &usageError{}
 	}
