@@ -60,7 +60,7 @@ One channel can have at most a window of data in flight, so it can't go faster t
 - If the sender uses a whole window in under two round trips, the window is what's limiting it, so the receiver doubles the window. It grants the extra credit in its next WINDOW_UPDATE.
 - The round-trip time comes from probes. When none has completed yet, one is sent.
 - A window grows up to `-max-window` (default 16 MiB, about 160 MB/s at 100 ms).
-- No window grows once the sum of all channel windows on the connection would pass `-conn-window` (default 64 MiB). Initial windows are always granted, so the total is at most the larger of `-conn-window` and (open channels × 256 KiB). `serve`'s 1024-channel limit puts that at 256 MiB at worst.
+- No window grows once the sum of all channel windows on the connection would pass `-conn-window` (default 64 MiB). Initial windows are always granted, even on top of windows that already grew, so the total is at most `-conn-window` + (open channels × 256 KiB). With the defaults and `serve`'s 1024-channel limit, that's 320 MiB at worst.
 - Windows don't shrink. A channel's window leaves the total when the channel closes, though data it received that hasn't been read yet stays buffered until it is.
 - The round-trip time is re-measured, at most once a second, while growth checks fail, so windows keep growing if the path gets slower.
 

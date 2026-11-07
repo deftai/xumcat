@@ -60,8 +60,9 @@ type Options struct {
 	MaxChannelWindow int64
 	// ConnectionWindow limits auto-tuning across the connection (default
 	// 64 MiB): no window grows once the sum of all channel receive windows
-	// would exceed it. Initial windows are always granted, so the total is at
-	// most max(ConnectionWindow, open channels × InitialWindow). Windows do
+	// would exceed it. Initial windows are always granted, even on top of
+	// windows that already grew, so the total is at most ConnectionWindow +
+	// open channels × InitialWindow. Windows do
 	// not shrink; a channel's window leaves the sum when it closes, though
 	// data it received that the application has not read yet stays buffered.
 	ConnectionWindow int64
