@@ -2,7 +2,6 @@
 
   echo PORT                 TCP echo server; half-closes after the client's EOF
   stall PORT SECONDS        connect, read nothing for SECONDS, then report bytes waiting
-  fetch PORT NBYTES         connect, half-close, read NBYTES, print seconds taken
   fanout PORT N SIZE        N concurrent echo round trips of SIZE random bytes; print ok count
 """
 import os, socket, sys, threading, time
@@ -13,13 +12,17 @@ def echo(port):
     srv.listen(256)
 
     def handle(c):
+        c.settimeout(120)  # a stuck client cannot pin a thread forever
         with c:
-            while True:
-                b = c.recv(65536)
-                if not b:
-                    break
-                c.sendall(b)
-            c.shutdown(socket.SHUT_WR)
+            try:
+                while True:
+                    b = c.recv(65536)
+                    if not b:
+                        break
+                    c.sendall(b)
+                c.shutdown(socket.SHUT_WR)
+            except OSError:
+                pass
 
     while True:
         c, _ = srv.accept()
@@ -27,7 +30,7 @@ def echo(port):
 
 
 def stall(port, seconds):
-    c = socket.create_connection(("127.0.0.1", port))
+    c = socket.create_connection(("127.0.0.1", port), timeout=10)
     c.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 4096)
     time.sleep(seconds)
     c.setblocking(False)
@@ -41,19 +44,6 @@ def stall(port, seconds):
     except BlockingIOError:
         pass
     print(n)
-
-
-def fetch(port, nbytes):
-    t = time.time()
-    c = socket.create_connection(("127.0.0.1", port))
-    c.shutdown(socket.SHUT_WR)
-    got = 0
-    while got < nbytes:
-        b = c.recv(1 << 20)
-        if not b:
-            break
-        got += len(b)
-    print(f"{got} {time.time() - t:.2f}")
 
 
 def fanout(port, n, size):
@@ -88,4 +78,4 @@ def fanout(port, n, size):
 
 if __name__ == "__main__":
     cmd, args = sys.argv[1], [float(a) if "." in a else int(a) for a in sys.argv[2:]]
-    {"echo": echo, "stall": stall, "fetch": fetch, "fanout": fanout}[cmd](*args)
+    {"echo": echo, "stall": stall, "fanout": fanout}[cmd](*args)
