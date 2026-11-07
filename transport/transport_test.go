@@ -1,10 +1,14 @@
 package transport
 
 import (
+	"bytes"
 	"context"
+	"log"
 	"net"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -154,3 +158,33 @@ func TestWebSocketRequiresSubprotocol(t *testing.T) {
 	_, err = Dial(ctx, "ws://"+l.Addr().String()+"/", Options{})
 	assert.ErrorContains(t, err, "subprotocol")
 }
+
+func TestWebSocketErrorLog(t *testing.T) {
+	srvTLS, _ := testcert.New()
+	addr := freePort(t)
+	var buf syncBuffer
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go Serve(ctx, "wss://"+addr+"/", Options{TLS: srvTLS, ErrorLog: log.New(&buf, "", 0)}, func(xumux.FrameConn) {})
+	require.Eventually(t, func() bool {
+		c, err := net.Dial("tcp", addr)
+		if err != nil {
+			return false
+		}
+		c.Write([]byte("not a TLS handshake\r\n\r\n"))
+		c.Close()
+		return strings.Contains(buf.String(), "TLS handshake error")
+	}, 3*time.Second, 50*time.Millisecond, "the listener's HTTP errors reach Options.ErrorLog")
+}
+
+type syncBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (s *syncBuffer) Write(p []byte) (int, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.b.Write(p)
+}
+func (s *syncBuffer) String() string { s.mu.Lock(); defer s.mu.Unlock(); return s.b.String() }

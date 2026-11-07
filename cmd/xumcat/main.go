@@ -11,6 +11,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"os/signal"
 	"strings"
@@ -393,6 +394,9 @@ func serve(ctx context.Context, args []string) error {
 		return err
 	}
 	o := transport.Options{}
+	if c.verbose {
+		o.ErrorLog = log.New(os.Stderr, "xumcat: ", 0)
+	}
 	if *cert != "" || *key != "" {
 		pair, err := tls.LoadX509KeyPair(*cert, *key)
 		if err != nil {
