@@ -1496,12 +1496,14 @@ func (s *Session) growWindowLocked(c *Channel, returned int64) int64 {
 	}
 	elapsed := now.Sub(c.tuneStart)
 	c.tuneStart, c.tuneBytes = now, 0
-	srtt := s.stats.SRTT
-	if srtt == 0 {
+	// The larger of SRTT and the latest sample: smoothing alone would take
+	// several samples to notice that the path got slower.
+	if s.stats.SRTT == 0 {
 		s.probeRTTLocked()
 		return 0
 	}
-	if elapsed >= 2*srtt {
+	rtt := max(s.stats.SRTT, s.stats.RTT)
+	if elapsed >= 2*rtt {
 		// Not window-limited, or the RTT sample is stale (the path got slower).
 		// Refresh it, at most once a second, so growth can resume.
 		if now.Sub(s.rttProbedAt) > time.Second {
