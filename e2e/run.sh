@@ -91,7 +91,9 @@ scenario_forward() {
   waitport 17202 || return
   got=$(curl -s --max-time 120 http://127.0.0.1:17202/big.bin | sha256)
   check "$got" "$SUM" "curl GET $MB MB over HTTP through the forward"
-  codes=$(for i in $(seq 20); do curl -s --max-time 30 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:17202/small.txt & done; wait)
+  # xargs, not '& ... wait': a bare wait in a $(...) subshell can spin forever on
+  # jobs inherited from this shell (seen with bash 5 on Ubuntu).
+  codes=$(seq 20 | xargs -P 20 -I{} curl -s --max-time 30 -o /dev/null -w '%{http_code}\n' http://127.0.0.1:17202/small.txt)
   check "$(echo "$codes" | grep -c 200)" 20 "20 parallel HTTP requests all 200"
 }
 
