@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"net"
 	"strings"
@@ -150,7 +151,7 @@ func TestPing(t *testing.T) {
 	require.NoError(t, pingLoop(context.Background(), s, 2, time.Millisecond, &out))
 	assert.Equal(t, 3, strings.Count(out.String(), "\n"))
 	assert.Contains(t, out.String(), "2 sent, 0 lost")
-	assert.ErrorContains(t, ping(context.Background(), nil), "usage")
+	assert.ErrorContains(t, ping(context.Background(), nil), "need one XUMUX-URL")
 	assert.NoError(t, ping(context.Background(), []string{url, "-c", "1"}))
 }
 
@@ -163,4 +164,81 @@ func TestVersionAndHelpers(t *testing.T) {
 	c := common{tokenFile: "/does/not/exist"}
 	_, err := c.loadToken()
 	assert.Error(t, err)
+}
+
+// captureOutput points the CLI's stdout and stderr at buffers for one test.
+func captureOutput(t *testing.T) (out, errOut *bytes.Buffer) {
+	out, errOut = new(bytes.Buffer), new(bytes.Buffer)
+	oldOut, oldErr := stdout, stderr
+	stdout, stderr = out, errOut
+	t.Cleanup(func() { stdout, stderr = oldOut, oldErr })
+	return out, errOut
+}
+
+func TestHelpGoesToStdout(t *testing.T) {
+	out, errOut := captureOutput(t)
+	tests := []struct {
+		args []string
+		want []string
+	}{
+		{[]string{"-h"}, []string{"xumcat — relay byte streams", "Relay flags:", "-plaintext-auth"}},
+		{[]string{"--help"}, []string{"Relay flags:"}},
+		{[]string{"help"}, []string{"Relay flags:"}},
+		{[]string{"help", "serve"}, []string{"Usage: xumcat serve", "-allow PATTERN"}},
+		{[]string{"serve", "-h"}, []string{"Usage: xumcat serve"}},
+		{[]string{"help", "ping"}, []string{"Usage: xumcat ping", "-c int"}},
+		{[]string{"ping", "--help"}, []string{"Usage: xumcat ping"}},
+	}
+	for _, tt := range tests {
+		out.Reset()
+		errOut.Reset()
+		assert.Equal(t, 0, exitCode(run(tt.args), errOut), "%v", tt.args)
+		for _, w := range tt.want {
+			assert.Contains(t, out.String(), w, "%v", tt.args)
+		}
+		assert.Empty(t, errOut.String(), "%v writes nothing to stderr", tt.args)
+		for _, line := range strings.Split(out.String(), "\n") {
+			assert.LessOrEqual(t, displayWidth(line), 80, "%v: %q", tt.args, line)
+		}
+	}
+}
+
+func TestUsageErrors(t *testing.T) {
+	ctx := context.Background()
+	out, errOut := captureOutput(t)
+	code := func(err error) int { errOut.Reset(); return exitCode(err, errOut) }
+
+	assert.Equal(t, 0, code(nil))
+	assert.Equal(t, 2, code(relay(ctx, []string{"-bogus"})))
+	assert.Equal(t, "xumcat: flag provided but not defined: -bogus\nRun 'xumcat -h' for help.\n", errOut.String())
+	assert.Equal(t, 2, code(serve(ctx, []string{"-nope"})))
+	assert.Contains(t, errOut.String(), "Run 'xumcat serve -h' for help.")
+	assert.Equal(t, 2, code(relay(ctx, []string{"stdio"})))
+	assert.Contains(t, errOut.String(), "need an ENDPOINT and a XUMUX-URL")
+	assert.Equal(t, 2, code(run([]string{"help", "nope"})))
+	assert.Equal(t, 2, code(run([]string{"help", "a", "b"})))
+	assert.Empty(t, out.String(), "usage errors write nothing to stdout")
+
+	// No arguments: the full usage, on stderr.
+	errOut.Reset()
+	err := relay(ctx, nil)
+	assert.Contains(t, errOut.String(), "Relay flags:")
+	assert.Equal(t, 2, exitCode(err, errOut))
+	assert.Empty(t, out.String())
+
+	assert.Equal(t, 1, code(errors.New("connection refused")))
+	assert.Equal(t, "xumcat: connection refused\n", errOut.String())
+}
+
+// displayWidth is the terminal width of line, with tab stops every 8 columns.
+func displayWidth(line string) int {
+	w := 0
+	for _, r := range line {
+		if r == '\t' {
+			w += 8 - w%8
+		} else {
+			w++
+		}
+	}
+	return w
 }

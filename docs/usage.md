@@ -15,7 +15,7 @@ If ENDPOINT is a listening address (`tcp-listen:`, `unix-listen:`), xumcat keeps
 | `-insecure` | Skip TLS certificate verification. |
 | `-v` | Log connection and channel events to stderr. |
 
-Exit status is 0 after a clean exchange, 1 otherwise. A refused channel prints the peer's code, for example `channel refused (4500): dial tcp …: connection refused`.
+Exit status is 0 after a clean exchange (and for `-h`), 1 if the connection or relay fails, and 2 for a usage mistake such as a missing argument or an unknown flag. `xumcat help [serve|ping]` and `-h` print help to stdout. A refused channel prints the peer's code, for example `channel refused (4500): dial tcp …: connection refused`.
 
 ## `xumcat serve [flags] XUMUX-URL...`
 
