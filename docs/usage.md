@@ -13,6 +13,8 @@ If ENDPOINT is a listening address (`tcp-listen:`, `unix-listen:`), xumcat keeps
 | `-token TOKEN`, `-token-file FILE` | Shared token sent in HELLO `auth` as `{"type":"token","token":…}`. |
 | `-plaintext-auth` | Allow sending the token over `ws://` or `tcp+xumux://` to a non-loopback host. |
 | `-insecure` | Skip TLS certificate verification. |
+| `-max-window SIZE` | Largest receive window one channel may grow to (default `16MiB`; `0` turns auto-tuning off). See [Receive windows](#receive-windows). |
+| `-conn-window SIZE` | Cap on the sum of all channel receive windows on a connection (default `64MiB`). |
 | `-v` | Log connection and channel events to stderr. |
 
 Exit status is 0 after a clean exchange (and for `-h`), 1 if the connection or relay fails, and 2 for a usage mistake such as a missing argument or an unknown flag. `xumcat help [serve|ping]` and `-h` print help to stdout. A refused channel prints the peer's code, for example `channel refused (4500): dial tcp …: connection refused`.
@@ -27,7 +29,9 @@ Listens on each URL (`stdio+xumux` serves the one connection on stdin/stdout) an
 | `-default ADDR` | Target for channels that name none (allowed implicitly). |
 | `-token TOKEN`, `-token-file FILE` | Require this token in HELLO `auth`. |
 | `-tls-cert FILE`, `-tls-key FILE` | Certificate for `wss://` and `tls+xumux://` listeners. |
-| `-v` | Log to stderr. |
+| `-max-window SIZE` | Largest receive window one channel may grow to (default `16MiB`; `0` turns auto-tuning off). See [Receive windows](#receive-windows). |
+| `-conn-window SIZE` | Cap on the sum of all channel receive windows on a connection (default `64MiB`). |
+| `-v` | Log to stderr (including failed TLS handshakes and bad HTTP requests). |
 
 Channel refusals use the spec's codes: `4010` (profile not `pipe/1`, no target, or target not allowed) and `4500` (target unreachable).
 
@@ -43,7 +47,29 @@ Sends probes on channel 0 and prints each round-trip time, then SRTT and RTTVAR 
 
 ## Protocol behaviour
 
-- **Limits:** xumcat declares the spec defaults (64 KiB frames, 256 KiB messages, 256 KiB window per channel) and sends 16 KiB fragments, interleaving channels round-robin.
+- **Limits:** xumcat declares the spec defaults (64 KiB frames, 256 KiB messages, 256 KiB initial window per channel) and sends 16 KiB fragments, interleaving channels round-robin.
 - **Credit:** `pipe/1` returns credit only after bytes are written to the local end, so a slow local consumer slows down that one channel and no other.
 - **Keepalive:** a ping on channel 0 after 30 s of silence, and a close with `4008` if nothing arrives within 10 s after that (the server's values apply).
 - **Close:** after a CLOSE exchange each side half-closes its write side, then closes the transport.
+
+## Receive windows
+
+One channel can have at most a window of data in flight, so it can't go faster than window ÷ round-trip time. The initial 256 KiB window gives about 5 MB/s at 50 ms or 2.6 MB/s at 100 ms. To keep long links fast, the receiver auto-tunes:
+
+- Each channel starts at the 256 KiB initial window.
+- If the sender uses a whole window in under two round trips, the window is what's limiting it, so the receiver doubles the window. It grants the extra credit in its next WINDOW_UPDATE.
+- The round-trip time comes from probes. When none has completed yet, one is sent.
+- A window grows up to `-max-window` (default 16 MiB, about 160 MB/s at 100 ms).
+- The sum of all channel windows on a connection stays within `-conn-window` (default 64 MiB). This bounds how much a peer can make this side buffer. The initial windows are always granted.
+- Windows don't shrink. A channel's growth goes back to the budget when the channel closes.
+
+Each side tunes its own receive windows, so set the flags on the side that receives the bulk data: `serve` for uploads, the client for downloads. Auto-tuning is purely local and needs nothing from the peer, so it works with any xumux implementation. Measured through a delay proxy on one machine, a single channel moving 50 MB:
+
+| RTT | Fixed 256 KiB window | Auto-tuned |
+|---|---|---|
+| 10 ms | 21 MB/s | 352 MB/s |
+| 50 ms | 4.4 MB/s | 77 MB/s |
+| 100 ms | 2.4 MB/s | 42 MB/s |
+| 200 ms | 1.2 MB/s | 22 MB/s |
+
+These figures include the ramp-up. Longer transfers get closer to the `-max-window` ÷ RTT limit.

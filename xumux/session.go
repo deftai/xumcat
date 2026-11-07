@@ -52,6 +52,17 @@ type Options struct {
 	FragmentSize int
 	// MaxChannels caps open plus pending peer-opened channels (code 4002).
 	MaxChannels int
+	// MaxChannelWindow is how far auto-tuning may grow one channel's receive
+	// window (default 16 MiB). Each channel starts at Limits.InitialWindow;
+	// when the peer uses a whole window in under two round trips, so that the
+	// window rather than the link limits it, the window doubles. A value at or
+	// below Limits.InitialWindow, or negative, disables auto-tuning.
+	MaxChannelWindow int64
+	// ConnectionWindow caps the sum of all channel receive windows on the
+	// connection (default 64 MiB), bounding the memory a peer can make this
+	// side buffer. Initial windows are always granted; only growth is limited.
+	// Windows do not shrink; a channel's growth is released when it closes.
+	ConnectionWindow int64
 	// Acceptor decides on peer-opened channels. Nil refuses them with 1003.
 	Acceptor Acceptor
 	// OnError is called (in its own goroutine) for each ERROR the peer sends.
@@ -85,6 +96,16 @@ func (o Options) withDefaults() Options {
 	}
 	if o.MaxChannels <= 0 {
 		o.MaxChannels = DefaultMaxChannels
+	}
+	switch {
+	case o.MaxChannelWindow == 0:
+		o.MaxChannelWindow = DefaultMaxChannelWindow
+	case o.MaxChannelWindow < 0:
+		o.MaxChannelWindow = int64(o.Limits.InitialWindow)
+	}
+	o.MaxChannelWindow = min(o.MaxChannelWindow, MaxWindow)
+	if o.ConnectionWindow <= 0 {
+		o.ConnectionWindow = DefaultConnectionWindow
 	}
 	return o
 }
@@ -144,6 +165,8 @@ type Session struct {
 	pings         map[uint32]*pendingPing
 	stats         statsRecorder
 	keepaliveAt   time.Time // when the outstanding keepalive PING was sent
+	windowTotal   int64     // sum of channel receive windows (auto-tuning budget)
+	rttProbing    bool      // an auto-tuning RTT probe is in flight
 
 	// Outbound scheduler, guarded by mu.
 	urgent       []*outItem
@@ -1111,6 +1134,7 @@ func (s *Session) finishChannelLocked(c *Channel) {
 	if c.state == chanClosed {
 		return
 	}
+	s.windowTotal -= c.recvWindow
 	wasOpening := c.state == chanOpening
 	c.state = chanClosed
 	if s.chans[c.id] == c {
@@ -1265,8 +1289,9 @@ func (s *Session) nextLocked() *outItem {
 		var entries []windowEntry
 		for id, c := range s.chans {
 			if c.unreturned > 0 && c.state == chanOpen && !c.sentClose {
-				entries = append(entries, windowEntry{id, uint32(c.unreturned)})
-				c.recvCredit += c.unreturned
+				inc := c.unreturned + s.growWindowLocked(c, c.unreturned)
+				entries = append(entries, windowEntry{id, uint32(inc)})
+				c.recvCredit += inc
 				c.unreturned = 0
 			}
 		}
@@ -1447,4 +1472,64 @@ func (r *statsRecorder) sample(rtt time.Duration) {
 	}
 	r.RTTVar = (3*r.RTTVar + d) / 4
 	r.SRTT = (7*r.SRTT + rtt) / 8
+}
+
+// growWindowLocked is receive-window auto-tuning. It is called as returned
+// bytes of credit go out in a WINDOW_UPDATE, and returns extra credit to
+// grant on top. A sender held back only by the window delivers one window
+// per round trip; if a whole window was used in under two round trips, the
+// window doubles, within MaxChannelWindow and the ConnectionWindow budget.
+func (s *Session) growWindowLocked(c *Channel, returned int64) int64 {
+	if s.opts.MaxChannelWindow <= c.recvWindow || !c.props.Reliable {
+		return 0
+	}
+	now := time.Now()
+	if c.tuneStart.IsZero() {
+		c.tuneStart = now
+	}
+	c.tuneBytes += returned
+	if c.tuneBytes < c.recvWindow {
+		return 0
+	}
+	elapsed := now.Sub(c.tuneStart)
+	c.tuneStart, c.tuneBytes = now, 0
+	srtt := s.stats.SRTT
+	if srtt == 0 {
+		s.probeRTTLocked()
+		return 0
+	}
+	if elapsed >= 2*srtt {
+		return 0
+	}
+	extra := min(c.recvWindow, s.opts.MaxChannelWindow-c.recvWindow, s.opts.ConnectionWindow-s.windowTotal)
+	if extra <= 0 {
+		return 0
+	}
+	c.recvWindow += extra
+	s.windowTotal += extra
+	return extra
+}
+
+// probeRTTLocked measures the round-trip time once, for auto-tuning, when no
+// probe has completed yet (keepalive only pings an idle connection).
+func (s *Session) probeRTTLocked() {
+	if s.rttProbing || s.state != stateOpen {
+		return
+	}
+	s.rttProbing = true
+	go func() {
+		ctx, cancel := context.WithTimeout(s.ctx, s.pingTimeoutOrDefault())
+		defer cancel()
+		_, _ = s.ping(ctx, nil)
+		s.mu.Lock()
+		s.rttProbing = false
+		s.mu.Unlock()
+	}()
+}
+
+func (s *Session) pingTimeoutOrDefault() time.Duration {
+	if s.pingTimeout > 0 {
+		return s.pingTimeout
+	}
+	return DefaultPingTimeout
 }

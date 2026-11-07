@@ -14,6 +14,7 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -168,6 +169,64 @@ type common struct {
 	insecure         bool
 	verbose          bool
 	plaintextAuth    bool
+	maxWindow        size
+	connWindow       size
+}
+
+// registerWindows adds the receive-window auto-tuning flags.
+func (c *common) registerWindows(fs *flag.FlagSet) {
+	fs.Var(&c.maxWindow, "max-window", "let a channel's receive window grow to `SIZE` (default 16MiB; 0 = off)")
+	fs.Var(&c.connWindow, "conn-window", "cap the sum of all channel receive windows at `SIZE` (default 64MiB)")
+}
+
+// options returns session options with the window flags applied.
+func (c *common) options() xumux.Options {
+	o := xumux.Options{MaxChannelWindow: c.maxWindow.n, ConnectionWindow: c.connWindow.n}
+	if c.maxWindow.set && c.maxWindow.n == 0 {
+		o.MaxChannelWindow = -1
+	}
+	return o
+}
+
+// size is a byte count flag: 1048576, 512KiB, 16MiB, 1GiB (also KB/MB/GB = 1000s).
+type size struct {
+	n   int64
+	set bool
+}
+
+func (z *size) String() string {
+	if z == nil || !z.set {
+		return ""
+	}
+	return strconv.FormatInt(z.n, 10)
+}
+
+func (z *size) Set(v string) error {
+	n, err := parseSize(v)
+	if err != nil {
+		return err
+	}
+	z.n, z.set = n, true
+	return nil
+}
+
+func parseSize(v string) (int64, error) {
+	units := []struct {
+		suffix string
+		mult   int64
+	}{{"KiB", 1 << 10}, {"MiB", 1 << 20}, {"GiB", 1 << 30}, {"KB", 1e3}, {"MB", 1e6}, {"GB", 1e9}, {"K", 1 << 10}, {"M", 1 << 20}, {"G", 1 << 30}, {"B", 1}}
+	num, mult := strings.TrimSpace(v), int64(1)
+	for _, u := range units {
+		if strings.HasSuffix(strings.ToUpper(num), strings.ToUpper(u.suffix)) {
+			num, mult = strings.TrimSpace(num[:len(num)-len(u.suffix)]), u.mult
+			break
+		}
+	}
+	n, err := strconv.ParseInt(num, 10, 64)
+	if err != nil || n < 0 || n > (1<<31-1)/mult {
+		return 0, fmt.Errorf("invalid size %q (want e.g. 1048576, 512KiB, 16MiB)", v)
+	}
+	return n * mult, nil
 }
 
 func (c *common) register(fs *flag.FlagSet) {
@@ -197,6 +256,7 @@ func relay(ctx context.Context, args []string) error {
 	fs.Usage = func() { fmt.Fprint(fs.Output(), usage); fs.PrintDefaults() }
 	var c common
 	c.register(fs)
+	c.registerWindows(fs)
 	target := fs.String("t", "", "target for the server to connect the channel to (default: its -default)")
 	name := fs.String("name", "pipe", "channel name")
 	fs.BoolVar(&c.insecure, "insecure", false, "skip TLS certificate verification")
@@ -303,7 +363,7 @@ func connect(ctx context.Context, rawURL, token string, c *common) (*xumux.Sessi
 	if token != "" {
 		cfg.Auth = map[string]any{"type": "token", "token": token}
 	}
-	s, _, err := xumux.Connect(ctx, fc, cfg, xumux.Options{})
+	s, _, err := xumux.Connect(ctx, fc, cfg, c.options())
 	if err != nil {
 		return nil, err
 	}
@@ -367,6 +427,7 @@ func serve(ctx context.Context, args []string) error {
 	fs := flag.NewFlagSet("xumcat serve", flag.ContinueOnError)
 	var c common
 	c.register(fs)
+	c.registerWindows(fs)
 	var allow stringList
 	fs.Var(&allow, "allow", "allow targets matching `PATTERN`, e.g. 'tcp:localhost:*' (repeatable)")
 	def := fs.String("default", "", "target for channels that name none")
@@ -426,7 +487,9 @@ func serve(ctx context.Context, args []string) error {
 		}
 	}
 	handle := func(fc xumux.FrameConn) {
-		s, h, err := xumux.Accept(ctx, fc, sc, xumux.Options{Acceptor: responder.Acceptor()})
+		so := c.options()
+		so.Acceptor = responder.Acceptor()
+		s, h, err := xumux.Accept(ctx, fc, sc, so)
 		if err != nil {
 			c.logf("handshake failed: %v", err)
 			return

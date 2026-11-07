@@ -242,3 +242,29 @@ func displayWidth(line string) int {
 	}
 	return w
 }
+
+func TestParseSizeAndWindowOptions(t *testing.T) {
+	for in, want := range map[string]int64{"1048576": 1 << 20, "512KiB": 512 << 10, "16MiB": 16 << 20, "16mib": 16 << 20,
+		"1GiB": 1 << 30, "64M": 64 << 20, "2MB": 2e6, "0": 0, " 8 MiB ": 8 << 20} {
+		got, err := parseSize(in)
+		require.NoError(t, err, in)
+		assert.Equal(t, want, got, in)
+	}
+	for _, in := range []string{"", "x", "-1", "1.5MiB", "4GiB", "9999999999"} {
+		_, err := parseSize(in)
+		assert.Error(t, err, in)
+	}
+
+	var c common
+	assert.Equal(t, int64(0), c.options().MaxChannelWindow, "unset: library default")
+	require.NoError(t, c.maxWindow.Set("0"))
+	assert.Equal(t, int64(-1), c.options().MaxChannelWindow, "0 turns auto-tuning off")
+	require.NoError(t, c.maxWindow.Set("64MiB"))
+	require.NoError(t, c.connWindow.Set("256MiB"))
+	o := c.options()
+	assert.Equal(t, int64(64<<20), o.MaxChannelWindow)
+	assert.Equal(t, int64(256<<20), o.ConnectionWindow)
+	assert.Equal(t, "67108864", c.maxWindow.String())
+	assert.Equal(t, "", (&size{}).String())
+	assert.Error(t, relay(context.Background(), []string{"-max-window", "lots", "stdio", "stdio+xumux"}))
+}
