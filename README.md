@@ -12,7 +12,7 @@ This repository also contains **`xumux`, a Go implementation of the xumux 0.2 co
 go install github.com/deftai/xumcat/cmd/xumcat@latest
 ```
 
-or `make build` for `bin/xumcat`.
+or download a binary from [Releases](https://github.com/deftai/xumcat/releases), or `make build` for `bin/xumcat`.
 
 ## Quick start
 
