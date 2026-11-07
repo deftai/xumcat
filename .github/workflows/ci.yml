@@ -28,6 +28,6 @@ jobs:
           node-version: '22'
       - name: Build libxumux
         run: |
-          git clone --depth 1 https://github.com/deftai/libxumux ../libxumux
+          git clone --depth 1 --branch main https://github.com/deftai/libxumux ../libxumux
           cd ../libxumux && npm ci && npm run build
       - run: make test/interop LIBXUMUX_DIR=../libxumux
