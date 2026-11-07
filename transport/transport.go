@@ -14,11 +14,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/coder/websocket"
 
@@ -40,6 +42,9 @@ type Options struct {
 	MaxFramePayload uint32
 	// Stderr receives exec+xumux commands' stderr.
 	Stderr io.Writer
+	// ErrorLog receives the WebSocket listener's HTTP errors (failed TLS
+	// handshakes, bad requests). Nil discards them.
+	ErrorLog *log.Logger
 }
 
 // URL is a parsed xumux URL.
@@ -282,7 +287,11 @@ func serveWebSocket(ctx context.Context, u URL, o Options, handle func(xumux.Fra
 	if err != nil {
 		return err
 	}
-	srv := &http.Server{Handler: mux}
+	errLog := o.ErrorLog
+	if errLog == nil {
+		errLog = log.New(io.Discard, "", 0)
+	}
+	srv := &http.Server{Handler: mux, ErrorLog: errLog, ReadHeaderTimeout: 10 * time.Second}
 	stop := context.AfterFunc(ctx, func() { srv.Close() })
 	defer stop()
 	if u.Scheme == "wss" {
