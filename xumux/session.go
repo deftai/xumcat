@@ -58,10 +58,12 @@ type Options struct {
 	// window rather than the link limits it, the window doubles. A value at or
 	// below Limits.InitialWindow, or negative, disables auto-tuning.
 	MaxChannelWindow int64
-	// ConnectionWindow caps the sum of all channel receive windows on the
-	// connection (default 64 MiB), bounding the memory a peer can make this
-	// side buffer. Initial windows are always granted; only growth is limited.
-	// Windows do not shrink; a channel's growth is released when it closes.
+	// ConnectionWindow limits auto-tuning across the connection (default
+	// 64 MiB): no window grows once the sum of all channel receive windows
+	// would exceed it. Initial windows are always granted, so the total is at
+	// most max(ConnectionWindow, open channels × InitialWindow). Windows do
+	// not shrink; a channel's window leaves the sum when it closes, though
+	// data it received that the application has not read yet stays buffered.
 	ConnectionWindow int64
 	// Acceptor decides on peer-opened channels. Nil refuses them with 1003.
 	Acceptor Acceptor
@@ -167,6 +169,7 @@ type Session struct {
 	keepaliveAt   time.Time // when the outstanding keepalive PING was sent
 	windowTotal   int64     // sum of channel receive windows (auto-tuning budget)
 	rttProbing    bool      // an auto-tuning RTT probe is in flight
+	rttProbedAt   time.Time // when auto-tuning last sent one
 
 	// Outbound scheduler, guarded by mu.
 	urgent       []*outItem
@@ -1499,6 +1502,11 @@ func (s *Session) growWindowLocked(c *Channel, returned int64) int64 {
 		return 0
 	}
 	if elapsed >= 2*srtt {
+		// Not window-limited, or the RTT sample is stale (the path got slower).
+		// Refresh it, at most once a second, so growth can resume.
+		if now.Sub(s.rttProbedAt) > time.Second {
+			s.probeRTTLocked()
+		}
 		return 0
 	}
 	extra := min(c.recvWindow, s.opts.MaxChannelWindow-c.recvWindow, s.opts.ConnectionWindow-s.windowTotal)
@@ -1516,7 +1524,7 @@ func (s *Session) probeRTTLocked() {
 	if s.rttProbing || s.state != stateOpen {
 		return
 	}
-	s.rttProbing = true
+	s.rttProbing, s.rttProbedAt = true, time.Now()
 	go func() {
 		ctx, cancel := context.WithTimeout(s.ctx, s.pingTimeoutOrDefault())
 		defer cancel()

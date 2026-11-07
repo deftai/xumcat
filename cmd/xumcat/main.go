@@ -176,7 +176,7 @@ type common struct {
 // registerWindows adds the receive-window auto-tuning flags.
 func (c *common) registerWindows(fs *flag.FlagSet) {
 	fs.Var(&c.maxWindow, "max-window", "let a channel's receive window grow to `SIZE` (default 16MiB; 0 = off)")
-	fs.Var(&c.connWindow, "conn-window", "cap the sum of all channel receive windows at `SIZE` (default 64MiB)")
+	fs.Var(&c.connWindow, "conn-window", "stop growing windows once their sum reaches `SIZE` (default 64MiB)")
 }
 
 // options returns session options with the window flags applied.

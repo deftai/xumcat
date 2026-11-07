@@ -251,3 +251,20 @@ func TestFirstWindowNeedsATimedSample(t *testing.T) {
 	time.Sleep(20 * time.Millisecond) // let the WINDOW_UPDATE go out
 	assert.Equal(t, int64(DefaultInitialWindow), peer.ReceiveWindow())
 }
+
+func TestStaleRTTIsRefreshed(t *testing.T) {
+	// The only RTT sample says 1 µs, but the link is 40 ms. Every growth check
+	// fails against the stale sample until a fresh probe replaces it.
+	const oneWay = 20 * time.Millisecond
+	sopts := acceptAll(func(*Channel) {})
+	sopts.PingInterval = -1
+	_, server, res := delayedPair(t, oneWay, Options{PingInterval: -1}, sopts, reliable)
+	peer := serverChannel(t, server)
+	server.mu.Lock()
+	server.stats.sample(time.Microsecond)
+	server.rttProbedAt = time.Now().Add(-time.Hour)
+	server.mu.Unlock()
+	blast(t, res.Channels[0], peer, 32<<20)
+	assert.Greater(t, peer.ReceiveWindow(), int64(DefaultInitialWindow), "growth resumed after the RTT was re-measured")
+	assert.Greater(t, server.Stats().SRTT, time.Millisecond, "SRTT now reflects the real link")
+}
