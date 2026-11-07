@@ -6,7 +6,7 @@ PKGS     := ./...
 COVER_MIN := 75
 LIBXUMUX_DIR ?=
 
-.PHONY: help deps build go/build go/fmt go/vet test test/run test/race test/coverage test/interop check clean
+.PHONY: help deps build go/build go/fmt go/vet test test/run test/race test/coverage test/interop test/e2e check clean
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z/_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-16s %s\n",$$1,$$2}'
@@ -39,6 +39,9 @@ test/coverage: ## Coverage report; fails if any package is below $(COVER_MIN)%
 test/interop: ## Interop tests against libxumux (LIBXUMUX_DIR=path/to/built/libxumux)
 	@test -n "$(LIBXUMUX_DIR)" || (echo "set LIBXUMUX_DIR to a built libxumux checkout" && exit 1)
 	LIBXUMUX_DIR=$(abspath $(LIBXUMUX_DIR)) go test -count=1 -run Interop -v ./xumux
+
+test/e2e: go/build ## xumcat <-> xumcat end-to-end tests with real processes (E2E_MB=50)
+	XUMCAT=$(abspath $(BIN)) e2e/run.sh
 
 check: go/fmt go/vet test/race test/coverage ## Pre-commit gate: fmt, vet, race tests, coverage
 

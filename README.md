@@ -91,6 +91,7 @@ A server uses `xumux.Accept` with an `Options.Acceptor`, which decides on every 
 ```sh
 make check          # fmt, vet, race tests, coverage (≥75% per package)
 make test/interop LIBXUMUX_DIR=../libxumux   # against a built libxumux checkout
+make test/e2e       # xumcat <-> xumcat with real processes: transports, forwarding, flow control, auth
 make help
 ```
 

@@ -31,3 +31,11 @@ jobs:
           git clone --depth 1 --branch main https://github.com/deftai/libxumux ../libxumux
           cd ../libxumux && npm ci && npm run build
       - run: make test/interop LIBXUMUX_DIR=../libxumux
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: make test/e2e
