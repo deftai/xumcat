@@ -232,3 +232,22 @@ func TestWindowDoesNotGrowOnFastLink(t *testing.T) {
 	blast(t, res.Channels[0], peer, 4<<20)
 	assert.LessOrEqual(t, peer.ReceiveWindow(), int64(4*DefaultInitialWindow))
 }
+
+func TestFirstWindowNeedsATimedSample(t *testing.T) {
+	// SRTT is known and tiny; the peer then sends one message as large as the
+	// whole window, long after the channel opened. Consuming it took far longer
+	// than two round trips, so the window must not grow.
+	sopts := acceptAll(func(*Channel) {})
+	sopts.PingInterval = -1
+	_, server, res := pair(t, Options{PingInterval: -1}, sopts, reliable)
+	peer := serverChannel(t, server)
+	_, err := server.Ping(ctx(t))
+	require.NoError(t, err)
+	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, res.Channels[0].Send(ctx(t), 1, make([]byte, DefaultInitialWindow)))
+	m, err := peer.Receive(ctx(t))
+	require.NoError(t, err)
+	require.Len(t, m.Payload, DefaultInitialWindow)
+	time.Sleep(20 * time.Millisecond) // let the WINDOW_UPDATE go out
+	assert.Equal(t, int64(DefaultInitialWindow), peer.ReceiveWindow())
+}

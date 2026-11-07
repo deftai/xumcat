@@ -1483,10 +1483,10 @@ func (s *Session) growWindowLocked(c *Channel, returned int64) int64 {
 	if s.opts.MaxChannelWindow <= c.recvWindow || !c.props.Reliable {
 		return 0
 	}
+	// A measurement starts when a window's worth of credit is granted (channel
+	// open, then each time a full window has been used), so the time includes
+	// receiving the bytes, not only returning them.
 	now := time.Now()
-	if c.tuneStart.IsZero() {
-		c.tuneStart = now
-	}
 	c.tuneBytes += returned
 	if c.tuneBytes < c.recvWindow {
 		return 0

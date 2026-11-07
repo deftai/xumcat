@@ -81,6 +81,8 @@ func (s *Session) newChannel(r ChannelRequest, localOpener bool, state chanState
 		state: state, props: Properties{Reliable: r.Reliable, Ordered: r.Ordered, MaxRetransmits: r.MaxRetransmits, MaxPacketLifeTime: r.MaxPacketLifeTime},
 		recvCredit: int64(s.local.InitialWindow), creditSig: make(chan struct{}), inboxSig: make(chan struct{}),
 		pings: map[uint32]*pendingPing{}, recvWindow: int64(s.local.InitialWindow),
+		// The first measurement starts when the initial window is granted.
+		tuneStart: time.Now(),
 	}
 	s.windowTotal += c.recvWindow
 	s.chans[r.ID] = c
