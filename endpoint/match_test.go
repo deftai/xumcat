@@ -50,6 +50,9 @@ func TestMatchFieldByField(t *testing.T) {
 		{"unix:/run/app/*", "unix:/run/app/..", false},
 		{"unix:/run/app/*.sock", "unix:/run/app//a.sock", false},
 		{"unix:/run/app/*.sock", "unix:/run/app/sub/a.sock", false},
+		{"unix:*/app.sock", "unix:../app.sock", false},
+		{"unix:*/app.sock", "unix:x/app.sock", false},
+		{"unix:@xumcat-*", "unix:@xumcat-1", true},
 
 		// exec: is exact, and wildcard exec patterns match nothing.
 		{"exec:cat", "exec:cat /etc/hosts", false},
@@ -69,7 +72,7 @@ func TestValidatePattern(t *testing.T) {
 	for _, ok := range []string{"tcp:localhost:*", "tcp:[::1]:22", "unix:/run/*.sock", "exec:cat", "stdio", "tls:*:443"} {
 		assert.NoError(t, ValidatePattern(ok), ok)
 	}
-	for _, bad := range []string{"exec:echo *", "exec:ls ?", "tcp-listen:22", "tcp:localhost:ssh", "nonsense", "tcp:localhost"} {
+	for _, bad := range []string{"unix:*/app.sock", "unix:run/app.sock", "exec:echo *", "exec:ls ?", "tcp-listen:22", "tcp:localhost:ssh", "nonsense", "tcp:localhost"} {
 		assert.Error(t, ValidatePattern(bad), bad)
 	}
 }

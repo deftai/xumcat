@@ -161,3 +161,53 @@ func TestHandlerRunsWhenConnectionEndsDuringAccept(t *testing.T) {
 		t.Fatal("handler never ran: whatever the Acceptor opened leaks")
 	}
 }
+
+// Channels accepted in the handshake must have their handlers run even when
+// the client drops the transport at once: otherwise their targets leak.
+// Before the fix, Accept looked the channels up after starting the reader,
+// which could already have removed them. That window is too narrow to hit
+// reliably here, so this is a guard on the requirement rather than a
+// reproduction.
+func TestHandshakeChannelHandlersRunWhenPeerDropsAtOnce(t *testing.T) {
+	const rounds, perRound = 50, 8
+	for round := 0; round < rounds; round++ {
+		l, err := net.Listen("tcp", "127.0.0.1:0")
+		require.NoError(t, err)
+		ran := make(chan struct{}, perRound)
+		go func() {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			_, _, _ = Accept(context.Background(), NewStreamConn(c), ServerConfig{}, Options{PingInterval: -1,
+				Acceptor: func(context.Context, ChannelRequest) (Handler, error) {
+					time.Sleep(2 * time.Millisecond) // let the client's close arrive first
+					return func(*Channel) { ran <- struct{}{} }, nil
+				}})
+		}()
+		raw, err := net.Dial("tcp", l.Addr().String())
+		require.NoError(t, err)
+		specs := make([]ChannelSpec, perRound)
+		for i := range specs {
+			specs[i] = ChannelSpec{Name: "x", Reliable: true, Ordered: true}
+		}
+		// Send HELLO and drop the transport before WELCOME arrives, so the
+		// server's reader sees EOF the moment it starts.
+		hello := Hello{Version: Version, Limits: Limits{MaxFramePayload: DefaultMaxFramePayload, MaxMessageSize: DefaultMaxMessageSize, InitialWindow: DefaultInitialWindow}}
+		for i := range specs {
+			hello.Channels = append(hello.Channels, ChannelRequest{ID: uint16(2*i + 1), Name: "x", Reliable: true, Ordered: true})
+		}
+		fc := NewStreamConn(raw)
+		require.NoError(t, fc.WriteFrame(controlFrame(TypeHello, hello)))
+		raw.(*net.TCPConn).SetLinger(0)
+		raw.Close()
+		for i := 0; i < perRound; i++ {
+			select {
+			case <-ran:
+			case <-time.After(2 * time.Second):
+				t.Fatalf("round %d: only %d of %d handlers ran", round, i, perRound)
+			}
+		}
+		l.Close()
+	}
+}

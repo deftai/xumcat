@@ -441,6 +441,7 @@ func Accept(ctx context.Context, conn FrameConn, cfg ServerConfig, opts Options)
 	type acceptedChannel struct {
 		req     ChannelRequest
 		handler Handler
+		ch      *Channel
 	}
 	var open []acceptedChannel
 	for _, r := range h.Channels {
@@ -450,7 +451,7 @@ func Accept(ctx context.Context, conn FrameConn, cfg ServerConfig, opts Options)
 			continue
 		}
 		welcome.Channels = append(welcome.Channels, ChannelAccept{ID: r.ID, Properties: effectiveProperties(r)})
-		open = append(open, acceptedChannel{r, handler})
+		open = append(open, acceptedChannel{req: r, handler: handler})
 	}
 	if s.opts.PingInterval > 0 {
 		s.pingInterval, s.pingTimeout = s.opts.PingInterval, s.opts.PingTimeout
@@ -459,30 +460,27 @@ func Accept(ctx context.Context, conn FrameConn, cfg ServerConfig, opts Options)
 		welcome.PingTimeout = s.opts.PingTimeout.Seconds()
 	}
 	s.remote = h.Limits
-	for _, a := range open {
+	for i, a := range open {
 		c := s.newChannel(a.req, false, chanOpen)
 		c.props = effectiveProperties(a.req)
 		c.sendCredit = int64(s.remote.InitialWindow)
+		open[i].ch = c
 	}
 	if err := conn.WriteFrame(controlFrame(TypeWelcome, welcome)); err != nil {
 		conn.Close()
 		s.mu.Lock()
 		for _, a := range open {
-			if c := s.chans[a.req.ID]; c != nil {
-				s.discardHandlerLocked(c, a.handler)
-			}
+			s.discardHandlerLocked(a.ch, a.handler)
 		}
 		s.mu.Unlock()
 		return nil, nil, err
 	}
 	s.start()
+	// Run every accepted handler, even if the peer has already gone and the
+	// reader has closed its channel: the handler's cleanup releases the
+	// target the Acceptor opened.
 	for _, a := range open {
-		s.mu.Lock()
-		c := s.chans[a.req.ID]
-		s.mu.Unlock()
-		if c != nil {
-			go a.handler(c)
-		}
+		go a.handler(a.ch)
 	}
 	return s, &h, nil
 }

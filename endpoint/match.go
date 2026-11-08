@@ -17,8 +17,9 @@ import (
 //     ':', is an IP pattern: it matches IP literals only, never a DNS name
 //     that merely starts with the same text. A host of * alone matches any
 //     host. The port must be a number from 1 to 65535.
-//   - unix: * and ? stay within one path segment, and the target path must
-//     already be clean (no "..", ".", "//" or trailing '/').
+//   - unix: * and ? stay within one path segment. The target path must be
+//     absolute and already clean (no "..", ".", "//" or trailing '/'), or a
+//     Linux abstract name starting with '@'. Patterns must be absolute too.
 //   - exec: matched exactly. Wildcards are refused, because the command
 //     runs through sh -c and a wildcard would admit shell syntax.
 //   - stdio: matched exactly.
@@ -37,6 +38,9 @@ func ValidatePattern(p string) error {
 	}
 	if a.Kind == "exec" && strings.ContainsAny(a.Command, "*?") {
 		return fmt.Errorf("pattern %q: exec: patterns must be exact commands; wildcards would let peers add shell syntax", p)
+	}
+	if a.Kind == "unix" && !strings.HasPrefix(a.Path, "/") && !strings.HasPrefix(a.Path, "@") {
+		return fmt.Errorf("pattern %q: unix: patterns must be absolute paths (or @abstract names)", p)
 	}
 	if a.Kind == "tcp" || a.Kind == "tls" {
 		if !isPortPattern(a.Port) {
@@ -70,13 +74,23 @@ func matchAddress(p, a Address) bool {
 	case "tcp", "tls":
 		return matchPort(p.Port, a.Port) && matchHost(p.Host, a.Host)
 	case "unix":
-		return path.Clean(a.Path) == a.Path && glob(p.Path, a.Path, '/')
+		return unixPathOK(a.Path) && glob(p.Path, a.Path, '/')
 	case "exec":
 		return p.Command == a.Command
 	case "stdio":
 		return true
 	}
 	return false
+}
+
+// unixPathOK accepts absolute, clean paths ("/run/app.sock") and Linux
+// abstract socket names ("@name"). Relative paths are refused: Clean keeps a
+// leading "..", so a wildcard could otherwise step outside the pattern.
+func unixPathOK(p string) bool {
+	if strings.HasPrefix(p, "@") {
+		return true
+	}
+	return strings.HasPrefix(p, "/") && path.Clean(p) == p
 }
 
 func isPortPattern(s string) bool {
