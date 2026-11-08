@@ -5,8 +5,9 @@ LDFLAGS  := -s -w -X main.version=$(VERSION)
 PKGS     := ./...
 COVER_MIN := 75
 LIBXUMUX_DIR ?=
+FUZZTIME ?= 30s
 
-.PHONY: help deps build go/build go/fmt go/vet test test/run test/race test/coverage test/interop test/e2e check clean
+.PHONY: help deps build go/build go/fmt go/vet test test/run test/race test/coverage test/interop test/e2e test/fuzz check clean
 
 help: ## Show targets
 	@grep -E '^[a-zA-Z/_-]+:.*?## ' $(MAKEFILE_LIST) | awk 'BEGIN{FS=":.*?## "}{printf "  %-16s %s\n",$$1,$$2}'
@@ -42,6 +43,14 @@ test/interop: ## Interop tests against libxumux (LIBXUMUX_DIR=path/to/built/libx
 
 test/e2e: go/build ## xumcat <-> xumcat end-to-end tests with real processes (E2E_MB=50)
 	XUMCAT=$(abspath $(BIN)) e2e/run.sh
+
+test/fuzz: ## Fuzz every target (FUZZTIME per target, default 30s)
+	@for pkg in ./xumux ./endpoint; do \
+	  for f in $$(go test -list '^Fuzz' $$pkg | grep '^Fuzz'); do \
+	    echo "== $$pkg $$f"; \
+	    go test -run '^$$' -fuzz "^$$f$$" -fuzztime $(FUZZTIME) $$pkg || exit 1; \
+	  done; \
+	done
 
 check: go/fmt go/vet test/race test/coverage ## Pre-commit gate: fmt, vet, race tests, coverage
 
