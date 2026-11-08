@@ -36,6 +36,7 @@ func FuzzMatch(f *testing.F) {
 		{"tcp:10.0.0.*:22", "tcp:10.0.0.5:22"}, {"tcp:*.example.com:443", "tcp:a.example.com:443"},
 		{"unix:/run/*/a.sock", "unix:/run/x/a.sock"}, {"exec:cat", "exec:cat"}, {"tcp:[::1]:*", "tcp:[::1]:8080"},
 		{"tcp:*:*", "tcp:host:1"}, {"unix:@x*", "unix:@x1"}, {"tcp:[fe80::1%eth0]:*", "tcp:[fe80::1%eth0]:22"},
+		{`unix:C:\run\*.sock`, `unix:C:\run\a.sock`},
 	} {
 		f.Add(c[0], c[1])
 	}
@@ -54,7 +55,11 @@ func FuzzMatch(f *testing.F) {
 				t.Fatalf("exec %q matched %q", pattern, target)
 			}
 		case "unix":
-			if !strings.HasPrefix(a.Path, "@") && (path.Clean(a.Path) != a.Path || !strings.HasPrefix(a.Path, "/")) {
+			if windowsPaths {
+				if !isDrivePath(a.Path) || strings.Contains(a.Path, "/") || strings.Contains(a.Path, `\\`) || strings.Contains(a.Path, `\..`) {
+					t.Fatalf("unclean Windows path %q matched %q", a.Path, pattern)
+				}
+			} else if !strings.HasPrefix(a.Path, "@") && (path.Clean(a.Path) != a.Path || !strings.HasPrefix(a.Path, "/")) {
 				t.Fatalf("unclean unix path %q matched %q", a.Path, pattern)
 			}
 		case "tcp", "tls":

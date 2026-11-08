@@ -40,7 +40,7 @@ Arguments are an **endpoint** and a **xumux URL**, in either order:
 | `tcp:HOST:PORT`, `tls:HOST:PORT`, `unix:PATH` | connect |
 | `tcp-listen:[HOST:]PORT`, `unix-listen:PATH` | listen; one channel per accepted connection |
 | `stdio` | this process's stdin/stdout |
-| `exec:COMMAND` | run `sh -c COMMAND` and use its stdin/stdout |
+| `exec:COMMAND` | run `sh -c COMMAND` (Windows: `cmd.exe /c`, [details](docs/usage.md#exec-on-windows)) and use its stdin/stdout |
 
 | xumux URLs | Binding |
 |---|---|

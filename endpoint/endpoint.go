@@ -7,7 +7,8 @@
 //	unix:/path           Unix-socket connect
 //	unix-listen:/path    Unix-socket listen
 //	stdio                this process's stdin/stdout
-//	exec:command args…   run a command (via sh -c) and use its stdin/stdout
+//	exec:command args…   run a command (via sh -c, or cmd.exe /c on Windows)
+//	                     and use its stdin/stdout
 package endpoint
 
 import (
@@ -260,11 +261,12 @@ type execConn struct {
 	waited chan struct{}
 }
 
-// Exec runs command with sh -c and connects to its stdin and stdout.
+// Exec runs command with sh -c (on Windows, cmd.exe /d /s /c) and connects
+// to its stdin and stdout.
 // CloseWrite closes its stdin; Close also waits briefly for it to exit,
 // then kills it.
 func Exec(ctx context.Context, command string, stderr io.Writer) (Conn, error) {
-	cmd := exec.Command("sh", "-c", command)
+	cmd := shellCommand(command)
 	if stderr == nil {
 		stderr = os.Stderr
 	}

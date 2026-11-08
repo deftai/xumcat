@@ -7,6 +7,7 @@ import (
 )
 
 func TestMatchFieldByField(t *testing.T) {
+	pathStyle(t, false)
 	for _, tc := range []struct {
 		pattern, target string
 		want            bool
@@ -68,6 +69,7 @@ func TestMatchFieldByField(t *testing.T) {
 }
 
 func TestValidatePattern(t *testing.T) {
+	pathStyle(t, false)
 	for _, ok := range []string{"tcp:localhost:*", "tcp:[::1]:22", "unix:/run/*.sock", "exec:cat", "stdio", "tls:*:443"} {
 		assert.NoError(t, ValidatePattern(ok), ok)
 	}
@@ -93,6 +95,7 @@ func TestGlob(t *testing.T) {
 }
 
 func TestAbstractSocketNames(t *testing.T) {
+	pathStyle(t, false)
 	saved := abstractSockets
 	defer func() { abstractSockets = saved }()
 
@@ -105,4 +108,49 @@ func TestAbstractSocketNames(t *testing.T) {
 	assert.False(t, Match([]string{"unix:@xumcat-*"}, "unix:@xumcat-1"))
 	assert.False(t, Match([]string{"unix:@app/*/*"}, "unix:@app/../private.sock"))
 	assert.Error(t, ValidatePattern("unix:@xumcat-*"))
+}
+
+// pathStyle makes unix: paths follow Unix (false) or Windows (true) rules
+// for the rest of the test, whatever the host system.
+func pathStyle(t *testing.T, windows bool) {
+	saved := windowsPaths
+	windowsPaths = windows
+	t.Cleanup(func() { windowsPaths = saved })
+}
+
+func TestWindowsSocketPaths(t *testing.T) {
+	pathStyle(t, true)
+	for _, ok := range []string{`unix:C:\run\*.sock`, `unix:c:\Users\me\app.sock`, `unix:D:\*`} {
+		assert.NoError(t, ValidatePattern(ok), ok)
+	}
+	for _, bad := range []string{"unix:/run/*.sock", `unix:run\app.sock`, `unix:\\server\share\a.sock`, `unix:?:\a.sock`, `unix:C:a.sock`, "unix:@name"} {
+		assert.Error(t, ValidatePattern(bad), bad)
+	}
+	for _, tc := range []struct {
+		pattern, target string
+		want            bool
+	}{
+		{`unix:C:\run\*.sock`, `unix:C:\run\a.sock`, true},
+		{`unix:C:\run\app\*`, `unix:C:\run\app\x`, true},
+		// A wildcard stays within one segment, and '/' is not a separator.
+		{`unix:C:\run\*.sock`, `unix:C:\run\sub\a.sock`, false},
+		{`unix:C:\run\*.sock`, `unix:C:\run\sub/a.sock`, false},
+		{`unix:C:\run\*`, `unix:C:\run\..`, false},
+		{`unix:C:\run\*\a.sock`, `unix:C:\run\..\a.sock`, false},
+		{`unix:C:\run\*\a.sock`, `unix:C:\run\.\a.sock`, false},
+		{`unix:C:\run\*.sock`, `unix:C:\run\\a.sock`, false},
+		// Segments Windows would rewrite, and alternate data streams.
+		{`unix:C:\run\*`, `unix:C:\run\a.`, false},
+		{`unix:C:\run\*`, `unix:C:\run\a `, false},
+		{`unix:C:\run\*\a.sock`, `unix:C:\run\... \a.sock`, false},
+		{`unix:C:\run\*`, `unix:C:\run\a.sock:stream`, false},
+		{`unix:C:\run\*`, `unix:C:\run\`, false},
+		// Unix-style paths are relative to the current drive: refused.
+		{`unix:C:\run\*`, "unix:/run/a.sock", false},
+		// Patterns are case-sensitive, so a differently cased target is
+		// refused rather than allowed.
+		{`unix:C:\run\*.sock`, `unix:c:\run\a.sock`, false},
+	} {
+		assert.Equal(t, tc.want, Match([]string{tc.pattern}, tc.target), "%s vs %s", tc.pattern, tc.target)
+	}
 }
