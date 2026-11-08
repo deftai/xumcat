@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -106,4 +107,53 @@ func TestControlQueueDefaultFitsAFullChannelBurst(t *testing.T) {
 		t.Fatalf("server closed: %v", server.CloseInfo())
 	default:
 	}
+}
+
+// Sending a frame releases its bytes: the cap bounds what is queued at
+// once, not the total ever sent.
+func TestControlQueueReleasesSentFrames(t *testing.T) {
+	const limit = 64 << 10
+	s := serverWithHeldWriter(t, Options{MaxControlQueue: limit, CloseTimeout: 100 * time.Millisecond})
+	frame := controlFrame(TypeError, ErrorMessage{Code: CodeUnsupported, Reason: "unsupported"})
+	perBatch := (limit / (HeaderSize + len(frame.Payload))) * 3 / 4 // fills three quarters of the cap
+	for batch := 0; batch < 10; batch++ {
+		s.mu.Lock()
+		for i := 0; i < perBatch; i++ {
+			_, err := s.enqueueLocked(frame, nil, false)
+			require.NoError(t, err, "batch %d frame %d", batch, i)
+		}
+		// Play the writer: take every queued frame off as if sent.
+		for len(s.urgent) > 0 {
+			s.nextLocked()
+		}
+		assert.Zero(t, s.urgentBytes, "batch %d: sent frames still counted", batch)
+		s.mu.Unlock()
+	}
+	assert.Equal(t, stateOpen, s.state)
+}
+
+// HELLO channels count toward MaxChannels; the rest are refused with 4002,
+// without reasons so a long refusal list still fits in WELCOME.
+func TestHelloChannelsRespectMaxChannels(t *testing.T) {
+	sopts := acceptAll(func(c *Channel) { _, _ = c.Receive(context.Background()) })
+	sopts.PingInterval, sopts.MaxChannels = -1, 2
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	defer l.Close()
+	go func() {
+		c, err := l.Accept()
+		if err == nil {
+			_, _, _ = Accept(context.Background(), NewStreamConn(c), ServerConfig{}, sopts)
+		}
+	}()
+	raw, err := net.Dial("tcp", l.Addr().String())
+	require.NoError(t, err)
+	defer raw.Close()
+	specs := []ChannelSpec{{Name: "a", Reliable: true, Ordered: true}, {Name: "b", Reliable: true, Ordered: true}, {Name: "c", Reliable: true, Ordered: true}}
+	_, res, err := Connect(context.Background(), NewStreamConn(raw), ClientConfig{Channels: specs}, Options{PingInterval: -1})
+	require.NoError(t, err)
+	assert.Len(t, res.Channels, 2)
+	require.Len(t, res.Rejected, 1)
+	assert.Equal(t, CodeChannelLimit, res.Rejected[0].Code)
+	assert.Empty(t, res.Rejected[0].Reason)
 }

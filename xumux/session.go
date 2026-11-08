@@ -456,6 +456,11 @@ func Accept(ctx context.Context, conn FrameConn, cfg ServerConfig, opts Options)
 	}
 	var open []acceptedChannel
 	for _, r := range h.Channels {
+		if len(open) >= s.opts.MaxChannels {
+			// No reason: a long list of refusals must still fit in WELCOME.
+			welcome.Rejected = append(welcome.Rejected, ChannelRefusal{ID: r.ID, Code: CodeChannelLimit})
+			continue
+		}
 		handler, refusal := s.decide(r)
 		if refusal != nil {
 			welcome.Rejected = append(welcome.Rejected, *refusal)
