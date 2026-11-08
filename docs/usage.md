@@ -48,10 +48,20 @@ A pattern is an endpoint address in which `*` (any run of characters) and `?` (o
   - A host of `*` alone matches any host.
   - Ports must be numbers from 1 to 65535.
 - **`unix:`.** Wildcards stay within one path segment. Patterns and target paths must be absolute, and targets must already be clean, with no `..`, `.`, `//` or trailing `/`. On Linux, abstract names (`@name`) are the exception to "absolute", and must be clean in the same way. On other systems an `@` path is relative, so it is refused.
-- **`exec:`.** Matched exactly. `serve` refuses to start if an `exec:` pattern has a wildcard: the command runs through `sh -c`, so a wildcard would let a peer append shell syntax.
+  - On Windows, absolute means a drive path such as `unix:C:\run\*.sock`, and only `\` separates segments. Targets may not contain `/`, a second `:`, empty, `.` or `..` segments, or a segment ending in `.` or a space (Windows would rewrite those). Matching is case-sensitive, so `c:\run\a.sock` does not match a `C:\run\*.sock` pattern; write targets the way the pattern spells them.
+- **`exec:`.** Matched exactly. `serve` refuses to start if an `exec:` pattern has a wildcard: the command runs through a shell, so a wildcard would let a peer append shell syntax.
 - There are no character classes: `[` and `]` are literal.
 
 Name patterns trust DNS: `tcp:*.corp.example:*` allows whatever those names resolve to.
+
+### `exec:` on Windows
+
+`exec:COMMAND` (and `exec+xumux:COMMAND`) runs `sh -c COMMAND` on Unix. On Windows it runs `%ComSpec% /d /s /c "COMMAND"` (normally `cmd.exe`), passing COMMAND through unchanged, so cmd.exe's rules apply, not sh's:
+
+- Quote with `"`, not `'`: cmd.exe treats `'` as an ordinary character. Each program then splits its own arguments (most use the Microsoft C runtime rules, where `\"` is a literal quote).
+- `&`, `|`, `<`, `>`, `^` and `%VAR%` are cmd.exe syntax. `%VAR%` expands even inside quotes, so an allowed `exec:` command is matched before expansion, against the text as written.
+- `/d` skips any AutoRun commands set in the registry.
+- Closing a channel kills `cmd.exe` if it hasn't exited after 2 seconds, but not programs it started; prefer commands that exit when their stdin closes.
 
 ## `xumcat ping [flags] XUMUX-URL`
 

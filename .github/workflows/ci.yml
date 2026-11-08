@@ -18,6 +18,21 @@ jobs:
       - run: go vet ./...
       - run: go test -race -count=1 ./...
       - run: make test/coverage
+  # Unit tests on Windows and macOS. The e2e suite is bash and runs on Linux
+  # only (the e2e job below).
+  test-os:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24'
+      - run: go vet ./...
+      - run: go test -count=1 ./...
   e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 15

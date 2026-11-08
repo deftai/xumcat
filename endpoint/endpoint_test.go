@@ -4,10 +4,13 @@ import (
 	"bytes"
 	"context"
 	"crypto/tls"
+	"fmt"
 	"io"
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -56,6 +59,7 @@ func TestParse(t *testing.T) {
 }
 
 func TestMatch(t *testing.T) {
+	pathStyle(t, false)
 	allow := []string{"tcp:localhost:*", "unix:/run/app/*.sock", "exec:cat"}
 	assert.True(t, Match(allow, "tcp:localhost:22"))
 	assert.False(t, Match(allow, "tcp:evil.com:22"))
@@ -161,18 +165,85 @@ func TestDialTLS(t *testing.T) {
 	assert.Error(t, err, "untrusted certificate")
 }
 
+// TestMain lets exec: tests run this test binary as a portable stand-in for
+// cat and sleep, so they need no Unix tools on Windows.
+func TestMain(m *testing.M) {
+	if len(os.Args) > 1 {
+		switch os.Args[1] {
+		case "xumcat-helper-cat":
+			io.Copy(os.Stdout, os.Stdin)
+			os.Exit(0)
+		case "xumcat-helper-args":
+			fmt.Print(strings.Join(os.Args[2:], "|"))
+			os.Exit(0)
+		case "xumcat-helper-sleep":
+			time.Sleep(10 * time.Second)
+			os.Exit(0)
+		}
+	}
+	os.Exit(m.Run())
+}
+
+// helper returns a shell command that runs this test binary in a helper mode.
+func helper(t *testing.T, mode string) string {
+	exe, err := os.Executable()
+	require.NoError(t, err)
+	return `"` + exe + `" xumcat-helper-` + mode
+}
+
 func TestExec(t *testing.T) {
 	var stderr bytes.Buffer
-	c, err := Dial(context.Background(), "exec:cat; echo done >&2", Options{Stderr: &stderr})
+	toStderr := "; echo done >&2"
+	if runtime.GOOS == "windows" {
+		toStderr = " & >&2 echo done"
+	}
+	c, err := Dial(context.Background(), "exec:"+helper(t, "cat")+toStderr, Options{Stderr: &stderr})
 	require.NoError(t, err)
 	roundTrip(t, c)
-	assert.Equal(t, "done\n", stderr.String())
+	assert.Equal(t, "done", strings.TrimSpace(stderr.String()), "the command runs through the shell")
 
-	c, err = Exec(context.Background(), "sleep 30", nil)
+	c, err = Exec(context.Background(), helper(t, "sleep"), nil)
 	require.NoError(t, err)
 	start := time.Now()
 	c.Close()
 	assert.Less(t, time.Since(start), 4*time.Second, "a command that ignores EOF is killed")
+}
+
+// The command reaches the shell unchanged: quoted arguments keep their
+// spaces (with cmd.exe this relies on /s and a verbatim command line).
+func TestExecQuoting(t *testing.T) {
+	c, err := Exec(context.Background(), helper(t, "args")+` a "b c" "" d`, nil)
+	require.NoError(t, err)
+	c.CloseWrite()
+	b, err := io.ReadAll(c)
+	require.NoError(t, err)
+	c.Close()
+	assert.Equal(t, "a|b c||d", string(b))
+}
+
+func TestExecUnixShell(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("exec: runs through cmd.exe on Windows")
+	}
+	c, err := Exec(context.Background(), `printf '%s' "$0"`, nil)
+	require.NoError(t, err)
+	b, err := io.ReadAll(c)
+	require.NoError(t, err)
+	c.Close()
+	assert.Equal(t, "sh", string(b), "Unix commands still run under sh -c")
+}
+
+func TestExecWindowsShell(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("cmd.exe is Windows-only")
+	}
+	t.Setenv("XUMCAT_TEST_VAR", "from-cmd")
+	c, err := Exec(context.Background(), "echo %XUMCAT_TEST_VAR%", nil)
+	require.NoError(t, err)
+	b, err := io.ReadAll(c)
+	require.NoError(t, err)
+	c.Close()
+	assert.Equal(t, "from-cmd", strings.TrimSpace(string(b)), "the command runs under cmd.exe")
 }
 
 func TestStdioConn(t *testing.T) {

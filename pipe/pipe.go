@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	xumux "github.com/deftai/libxumux-go"
 	lpipe "github.com/deftai/libxumux-go/pipe"
@@ -138,6 +139,10 @@ func errOrOK(err error) any {
 	return err
 }
 
+// failCloseWait bounds how long Relay waits for pipe.Conn's own close of a
+// failed channel.
+const failCloseWait = 2 * time.Second
+
 // Relay copies bytes between the pipe/1 channel ch and conn until both
 // directions have ended, then closes both. It returns nil after a clean
 // exchange of EOFs, a *ResetError if the peer's end failed, or the error
@@ -199,6 +204,17 @@ func Relay(ctx context.Context, ch *xumux.Channel, conn endpoint.Conn) error {
 		_ = conn.CloseWrite() // the peer's EOF, after all its DATA
 	default:
 		result = err // a RESET, a protocol error, a closed channel
+		// pipe.Conn has closed the channel, or is closing it from a
+		// goroutine, with a code for the failure (1002 for a protocol
+		// error). Wait for that before the deferred p.Close, whose normal
+		// 1000 close would otherwise race it and could win.
+		defer func() {
+			select {
+			case <-ch.Done():
+			case <-ctx.Done():
+			case <-time.After(failCloseWait):
+			}
+		}()
 	}
 	// After stop, the conn -> pipe goroutine is not waited for: closing
 	// some conns (stdin) cannot interrupt a read already in progress, and

@@ -22,9 +22,13 @@ import (
 //     absolute and already clean (no "..", ".", "//" or trailing '/'), or a
 //     Linux abstract name starting with '@' (clean in the same way; on
 //     other systems '@' paths are relative and refused). Patterns must be
-//     absolute too.
+//     absolute too. On Windows, absolute means a drive path such as
+//     C:\run\app.sock: segments are separated by '\' only, and a target
+//     may not contain '/', a second ':', an empty, "." or ".." segment, or
+//     a segment ending in '.' or ' ' (which Windows would silently rewrite).
 //   - exec: matched exactly. Wildcards are refused, because the command
-//     runs through sh -c and a wildcard would admit shell syntax.
+//     runs through a shell (sh -c, or cmd.exe /c on Windows) and a
+//     wildcard would admit shell syntax.
 //   - stdio: matched exactly.
 //
 // There are no character classes: '[' and ']' are literal, so IPv6
@@ -42,7 +46,10 @@ func ValidatePattern(p string) error {
 	if a.Kind == "exec" && strings.ContainsAny(a.Command, "*?") {
 		return fmt.Errorf("pattern %q: exec: patterns must be exact commands; wildcards would let peers add shell syntax", p)
 	}
-	if a.Kind == "unix" && !strings.HasPrefix(a.Path, "/") && !(abstractSockets && strings.HasPrefix(a.Path, "@")) {
+	if a.Kind == "unix" && !absUnixPattern(a.Path) {
+		if windowsPaths {
+			return fmt.Errorf("pattern %q: unix: patterns must be absolute drive paths such as C:\\run\\*.sock", p)
+		}
 		return fmt.Errorf("pattern %q: unix: patterns must be absolute paths (or @abstract names on Linux)", p)
 	}
 	if a.Kind == "tcp" || a.Kind == "tls" {
@@ -77,7 +84,7 @@ func matchAddress(p, a Address) bool {
 	case "tcp", "tls":
 		return matchPort(p.Port, a.Port) && matchHost(p.Host, a.Host)
 	case "unix":
-		return unixPathOK(a.Path) && glob(p.Path, a.Path, '/')
+		return unixPathOK(a.Path) && glob(p.Path, a.Path, pathSep())
 	case "exec":
 		return p.Command == a.Command
 	case "stdio":
@@ -90,11 +97,66 @@ func matchAddress(p, a Address) bool {
 // other systems Go treats it as a relative filesystem path.
 var abstractSockets = runtime.GOOS == "linux"
 
+// windowsPaths reports whether unix: socket paths are Windows paths
+// (C:\dir\name, separated by '\').
+var windowsPaths = runtime.GOOS == "windows"
+
+func pathSep() byte {
+	if windowsPaths {
+		return '\\'
+	}
+	return '/'
+}
+
+// absUnixPattern reports whether a unix: pattern path is absolute.
+func absUnixPattern(p string) bool {
+	if windowsPaths {
+		return isDrivePath(p)
+	}
+	return strings.HasPrefix(p, "/") || (abstractSockets && strings.HasPrefix(p, "@"))
+}
+
+// isDrivePath reports whether p starts with a drive root such as "C:\".
+func isDrivePath(p string) bool {
+	if len(p) < 3 || p[1] != ':' || p[2] != '\\' {
+		return false
+	}
+	c := p[0] | 0x20 // lower case
+	return 'a' <= c && c <= 'z'
+}
+
+// windowsPathOK accepts a drive path whose segments Windows will not
+// rewrite: no '/' (an alternative separator), no further ':' (alternate data
+// streams), no empty, "." or ".." segments, and no segment ending in '.' or
+// ' ', which Win32 path normalisation strips.
+func windowsPathOK(p string) bool {
+	if !isDrivePath(p) {
+		return false
+	}
+	rest := p[3:]
+	if rest == "" {
+		return true // the drive root itself
+	}
+	if strings.ContainsAny(rest, "/:") {
+		return false
+	}
+	for _, seg := range strings.Split(rest, `\`) {
+		if seg == "" || strings.HasSuffix(seg, ".") || strings.HasSuffix(seg, " ") {
+			return false
+		}
+	}
+	return true
+}
+
 // unixPathOK accepts absolute, clean paths ("/run/app.sock") and, on Linux,
-// abstract socket names ("@name") that are clean in the same way. Relative
+// abstract socket names ("@name") that are clean in the same way, and on
+// Windows the drive paths windowsPathOK accepts. Relative
 // paths are refused: Clean keeps a leading "..", so a wildcard could
 // otherwise step outside the pattern.
 func unixPathOK(p string) bool {
+	if windowsPaths {
+		return windowsPathOK(p)
+	}
 	if name, ok := strings.CutPrefix(p, "@"); ok {
 		return abstractSockets && path.Clean("/"+name) == "/"+name
 	}
