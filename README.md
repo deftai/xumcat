@@ -4,7 +4,7 @@
 
 The xumux protocol itself is implemented by [libxumux-go](https://github.com/deftai/libxumux-go), a standalone Go module. It was written from the spec independently of the TypeScript [libxumux](https://github.com/deftai/libxumux) and is tested against it in both directions.
 
-> **Status:** xumux 0.2.0-draft. The wire format can still change before 1.0.
+> **Status:** xumux 0.3.0-draft. Not compatible with 0.2 peers (xumcat v0.3.x and earlier). The wire format can still change before 1.0.
 
 ## Install
 
