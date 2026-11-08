@@ -11,7 +11,6 @@ import (
 	"time"
 
 	xumux "github.com/deftai/libxumux-go"
-	"github.com/deftai/xumcat/pipe"
 	"github.com/deftai/xumcat/transport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -294,6 +293,6 @@ func TestMaxConnsBusy(t *testing.T) {
 	_, err := connect()
 	var ce *xumux.CloseError
 	require.True(t, errors.As(err, &ce), "%v", err)
-	assert.Equal(t, pipe.CodeBusy, ce.Code)
+	assert.Equal(t, xumux.CodeBusy, ce.Code)
 	assert.Contains(t, ce.Reason, "too many connections")
 }
