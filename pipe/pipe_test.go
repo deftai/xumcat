@@ -7,7 +7,6 @@ import (
 	"errors"
 	"io"
 	"net"
-	"runtime"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -154,13 +153,6 @@ func TestResetFromPeer(t *testing.T) {
 }
 
 func TestUnknownTypeClosesChannel(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		// libxumux-go v0.2.1 pipe.Conn sends the 1002 CHANNEL_CLOSE from a
-		// goroutine, while Relay's deferred Close sends 1000 synchronously.
-		// Either can win; on windows-latest the 1000 reliably does. Remove
-		// once pipe.Conn.Close reuses the failure code.
-		t.Skip("racy close code in libxumux-go pipe.Conn (see comment)")
-	}
 	ch, peer := rawPipe(t)
 	near, _ := tcpPair(t)
 	relayed := make(chan error, 1)
