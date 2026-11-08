@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/netip"
 	"path"
+	"runtime"
 	"strconv"
 	"strings"
 )
@@ -19,7 +20,9 @@ import (
 //     host. The port must be a number from 1 to 65535.
 //   - unix: * and ? stay within one path segment. The target path must be
 //     absolute and already clean (no "..", ".", "//" or trailing '/'), or a
-//     Linux abstract name starting with '@'. Patterns must be absolute too.
+//     Linux abstract name starting with '@' (clean in the same way; on
+//     other systems '@' paths are relative and refused). Patterns must be
+//     absolute too.
 //   - exec: matched exactly. Wildcards are refused, because the command
 //     runs through sh -c and a wildcard would admit shell syntax.
 //   - stdio: matched exactly.
@@ -39,8 +42,8 @@ func ValidatePattern(p string) error {
 	if a.Kind == "exec" && strings.ContainsAny(a.Command, "*?") {
 		return fmt.Errorf("pattern %q: exec: patterns must be exact commands; wildcards would let peers add shell syntax", p)
 	}
-	if a.Kind == "unix" && !strings.HasPrefix(a.Path, "/") && !strings.HasPrefix(a.Path, "@") {
-		return fmt.Errorf("pattern %q: unix: patterns must be absolute paths (or @abstract names)", p)
+	if a.Kind == "unix" && !strings.HasPrefix(a.Path, "/") && !(abstractSockets && strings.HasPrefix(a.Path, "@")) {
+		return fmt.Errorf("pattern %q: unix: patterns must be absolute paths (or @abstract names on Linux)", p)
 	}
 	if a.Kind == "tcp" || a.Kind == "tls" {
 		if !isPortPattern(a.Port) {
@@ -83,12 +86,17 @@ func matchAddress(p, a Address) bool {
 	return false
 }
 
-// unixPathOK accepts absolute, clean paths ("/run/app.sock") and Linux
-// abstract socket names ("@name"). Relative paths are refused: Clean keeps a
-// leading "..", so a wildcard could otherwise step outside the pattern.
+// abstractSockets reports whether "@name" is a Linux abstract socket. On
+// other systems Go treats it as a relative filesystem path.
+var abstractSockets = runtime.GOOS == "linux"
+
+// unixPathOK accepts absolute, clean paths ("/run/app.sock") and, on Linux,
+// abstract socket names ("@name") that are clean in the same way. Relative
+// paths are refused: Clean keeps a leading "..", so a wildcard could
+// otherwise step outside the pattern.
 func unixPathOK(p string) bool {
-	if strings.HasPrefix(p, "@") {
-		return true
+	if name, ok := strings.CutPrefix(p, "@"); ok {
+		return abstractSockets && path.Clean("/"+name) == "/"+name
 	}
 	return strings.HasPrefix(p, "/") && path.Clean(p) == p
 }

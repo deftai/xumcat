@@ -174,7 +174,9 @@ func TestHandshakeChannelHandlersRunWhenPeerDropsAtOnce(t *testing.T) {
 		l, err := net.Listen("tcp", "127.0.0.1:0")
 		require.NoError(t, err)
 		ran := make(chan struct{}, perRound)
+		served := make(chan struct{})
 		go func() {
+			defer close(served)
 			c, err := l.Accept()
 			if err != nil {
 				return
@@ -209,5 +211,6 @@ func TestHandshakeChannelHandlersRunWhenPeerDropsAtOnce(t *testing.T) {
 			}
 		}
 		l.Close()
+		<-served // the server goroutine never outlives its round
 	}
 }

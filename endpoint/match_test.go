@@ -52,7 +52,6 @@ func TestMatchFieldByField(t *testing.T) {
 		{"unix:/run/app/*.sock", "unix:/run/app/sub/a.sock", false},
 		{"unix:*/app.sock", "unix:../app.sock", false},
 		{"unix:*/app.sock", "unix:x/app.sock", false},
-		{"unix:@xumcat-*", "unix:@xumcat-1", true},
 
 		// exec: is exact, and wildcard exec patterns match nothing.
 		{"exec:cat", "exec:cat /etc/hosts", false},
@@ -91,4 +90,19 @@ func TestGlob(t *testing.T) {
 		long[i] = 'a'
 	}
 	assert.False(t, glob("*a*a*a*a*a*a*a*a*b", string(long), 0))
+}
+
+func TestAbstractSocketNames(t *testing.T) {
+	saved := abstractSockets
+	defer func() { abstractSockets = saved }()
+
+	abstractSockets = true // Linux
+	assert.True(t, Match([]string{"unix:@xumcat-*"}, "unix:@xumcat-1"))
+	assert.False(t, Match([]string{"unix:@app/*/*"}, "unix:@app/../private.sock"), "no .. even in abstract names")
+	assert.False(t, Match([]string{"unix:@app/*"}, "unix:@app//x"))
+
+	abstractSockets = false // elsewhere '@' is a relative path
+	assert.False(t, Match([]string{"unix:@xumcat-*"}, "unix:@xumcat-1"))
+	assert.False(t, Match([]string{"unix:@app/*/*"}, "unix:@app/../private.sock"))
+	assert.Error(t, ValidatePattern("unix:@xumcat-*"))
 }

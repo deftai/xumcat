@@ -47,7 +47,7 @@ A pattern is an endpoint address in which `*` (any run of characters) and `?` (o
   - IPv6 works: `tcp:[::1]:*`. Exact IPs compare by value, so `[0:0::1]` matches `[::1]`.
   - A host of `*` alone matches any host.
   - Ports must be numbers from 1 to 65535.
-- **`unix:`.** Wildcards stay within one path segment. Patterns and target paths must be absolute, and targets must already be clean, with no `..`, `.`, `//` or trailing `/`. Linux abstract names (`@name`) are the exception to "absolute".
+- **`unix:`.** Wildcards stay within one path segment. Patterns and target paths must be absolute, and targets must already be clean, with no `..`, `.`, `//` or trailing `/`. On Linux, abstract names (`@name`) are the exception to "absolute", and must be clean in the same way. On other systems an `@` path is relative, so it is refused.
 - **`exec:`.** Matched exactly. `serve` refuses to start if an `exec:` pattern has a wildcard: the command runs through `sh -c`, so a wildcard would let a peer append shell syntax.
 - There are no character classes: `[` and `]` are literal.
 
