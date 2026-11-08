@@ -20,10 +20,10 @@ import (
 	"syscall"
 	"time"
 
+	xumux "github.com/deftai/libxumux-go"
 	"github.com/deftai/xumcat/endpoint"
 	"github.com/deftai/xumcat/pipe"
 	"github.com/deftai/xumcat/transport"
-	"github.com/deftai/xumcat/xumux"
 )
 
 var version = "dev"
