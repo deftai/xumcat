@@ -401,8 +401,10 @@ Listens on each XUMUX-URL (stdio+xumux serves the one connection on
 stdin/stdout) and answers pipe/1 channels by connecting them to their
 target. Targets must match an -allow pattern; there is no default allow-all.
 
-Patterns are endpoint addresses with * and ? wildcards, matched within one
-path segment: tcp:localhost:*  tcp:10.0.0.?:22  unix:/run/app/*.sock
+Patterns are endpoint addresses with * and ? wildcards: tcp:localhost:*
+tcp:10.0.0.?:22  tcp:[::1]:*  unix:/run/app/*.sock. Wildcards stay within
+one DNS label, IP octet or path segment; IP patterns match IP literals
+only. exec: patterns must be exact commands.
 
 Examples:
   xumcat serve wss://:8443/xumux -allow 'tcp:localhost:*' \
@@ -433,6 +435,8 @@ func serve(ctx context.Context, args []string) error {
 	def := fs.String("default", "", "target for channels that name none")
 	cert := fs.String("tls-cert", "", "certificate file for wss:// and tls+xumux:// listeners")
 	key := fs.String("tls-key", "", "key file for wss:// and tls+xumux:// listeners")
+	maxConns := fs.Int("max-conns", 256, "serve at most `N` connections at once (0 = no limit)")
+	maxProcs := fs.Int("max-procs", 64, "run at most `N` exec: targets at once (0 = no limit)")
 	fs.Usage = func() {
 		fmt.Fprint(fs.Output(), serveUsage)
 		fs.PrintDefaults()
@@ -449,6 +453,14 @@ func serve(ctx context.Context, args []string) error {
 	}
 	if len(allow) == 0 {
 		return badUsage("xumcat serve -h", "no targets allowed: pass -allow PATTERN (and/or -default ADDR)")
+	}
+	for _, p := range allow {
+		if err := endpoint.ValidatePattern(p); err != nil {
+			return badUsage("xumcat serve -h", "%v", err)
+		}
+	}
+	if *maxConns < 0 || *maxProcs < 0 {
+		return badUsage("xumcat serve -h", "-max-conns and -max-procs must not be negative")
 	}
 	token, err := c.loadToken()
 	if err != nil {
@@ -475,7 +487,11 @@ func serve(ctx context.Context, args []string) error {
 		}
 	}
 
-	responder := &pipe.Responder{Allow: allow, Default: *def, Logf: c.logf}
+	responder := &pipe.Responder{Allow: allow, Default: *def, Logf: c.logf, MaxProcs: *maxProcs}
+	var conns chan struct{}
+	if *maxConns > 0 {
+		conns = make(chan struct{}, *maxConns)
+	}
 	sc := xumux.ServerConfig{}
 	if token != "" {
 		sc.Authorize = func(_ context.Context, h *xumux.Hello) error {
@@ -487,6 +503,21 @@ func serve(ctx context.Context, args []string) error {
 		}
 	}
 	handle := func(fc xumux.FrameConn) {
+		if conns != nil {
+			select {
+			case conns <- struct{}{}:
+				defer func() { <-conns }()
+			default:
+				// Answer the HELLO with a refusal so the client sees why. The
+				// handshake deadline still bounds how long this can take.
+				c.logf("refused a connection: %d already open (-max-conns)", *maxConns)
+				busy := xumux.ServerConfig{Authorize: func(context.Context, *xumux.Hello) error {
+					return &xumux.Refusal{Code: xumux.CodeRateLimited, Reason: "server busy: too many connections"}
+				}}
+				_, _, _ = xumux.Accept(ctx, fc, busy, c.options())
+				return
+			}
+		}
 		so := c.options()
 		so.Acceptor = responder.Acceptor()
 		s, h, err := xumux.Accept(ctx, fc, sc, so)

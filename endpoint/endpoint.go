@@ -19,7 +19,6 @@ import (
 	"net"
 	"os"
 	"os/exec"
-	"path"
 	"strings"
 	"sync"
 	"time"
@@ -231,24 +230,6 @@ func ListenUnix(p string) (net.Listener, error) {
 	}
 	l.(*net.UnixListener).SetUnlinkOnClose(true)
 	return l, nil
-}
-
-// Match reports whether addr matches one of the allow-list patterns. A
-// pattern is an endpoint address in which path.Match wildcards may appear,
-// such as tcp:localhost:* or unix:/run/app/*.sock. Addresses are compared
-// in canonical form.
-func Match(patterns []string, addr string) bool {
-	a, err := Parse(addr)
-	if err != nil || a.IsListen() {
-		return false
-	}
-	canon := a.String()
-	for _, p := range patterns {
-		if ok, _ := path.Match(p, canon); ok {
-			return true
-		}
-	}
-	return false
 }
 
 // ─── stdio ──────────────────────────────────────────────────────────────────

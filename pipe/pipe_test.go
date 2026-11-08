@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -179,3 +180,44 @@ func (failingConn) Read([]byte) (int, error)    { return 0, errors.New("disk on 
 func (failingConn) Write(b []byte) (int, error) { return len(b), nil }
 func (failingConn) Close() error                { return nil }
 func (failingConn) CloseWrite() error           { return nil }
+
+func TestMaxProcs(t *testing.T) {
+	var closed atomic.Int32
+	r := &Responder{Allow: []string{"exec:cat", "tcp:echo:1"}, MaxProcs: 1,
+		Dial: func(context.Context, string) (endpoint.Conn, error) {
+			near, _ := tcpPair(t)
+			return &countClose{Conn: near, n: &closed}, nil
+		}}
+	s := sessions(t, r)
+	first, err := Open(ctx(t), s, "a", "exec:cat")
+	require.NoError(t, err)
+
+	_, err = Open(ctx(t), s, "b", "exec:cat")
+	var ce *xumux.CloseError
+	require.True(t, errors.As(err, &ce), "%v", err)
+	assert.Equal(t, xumux.CodeChannelRefused, ce.Code)
+	assert.Contains(t, ce.Reason, "too many processes")
+
+	other, err := Open(ctx(t), s, "c", "tcp:echo:1")
+	require.NoError(t, err, "the limit applies to exec: targets only")
+	require.NoError(t, other.Close(ctx(t), xumux.CodeNormal, ""))
+
+	// Closing the first channel ends its relay, which closes the target and
+	// frees the slot.
+	require.NoError(t, first.Close(ctx(t), xumux.CodeNormal, ""))
+	require.Eventually(t, func() bool {
+		ch, err := Open(ctx(t), s, "d", "exec:cat")
+		if err != nil {
+			return false
+		}
+		_ = ch.Close(ctx(t), xumux.CodeNormal, "")
+		return true
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+type countClose struct {
+	endpoint.Conn
+	n *atomic.Int32
+}
+
+func (c *countClose) Close() error { c.n.Add(1); return c.Conn.Close() }

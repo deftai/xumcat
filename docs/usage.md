@@ -25,15 +25,33 @@ Listens on each URL (`stdio+xumux` serves the one connection on stdin/stdout) an
 
 | Flag | |
 |---|---|
-| `-allow PATTERN` | Allow targets matching an endpoint pattern (repeatable). `*` and `?` match within one path segment. |
+| `-allow PATTERN` | Allow targets matching an endpoint pattern (repeatable). See [Allow-list patterns](#allow-list-patterns). |
 | `-default ADDR` | Target for channels that name none (allowed implicitly). |
 | `-token TOKEN`, `-token-file FILE` | Require this token in HELLO `auth`. |
 | `-tls-cert FILE`, `-tls-key FILE` | Certificate for `wss://` and `tls+xumux://` listeners. |
 | `-max-window SIZE` | Largest receive window one channel may grow to (default `16MiB`; `0` turns auto-tuning off). See [Receive windows](#receive-windows). |
 | `-conn-window SIZE` | Stop growing windows once their sum on a connection reaches this (default `64MiB`). |
+| `-max-conns N` | Serve at most N connections at once (default `256`; `0` = no limit). Others are refused during the handshake with `4004`. |
+| `-max-procs N` | Run at most N `exec:` targets at once, across all connections (default `64`; `0` = no limit). Others are refused with `4010`. |
 | `-v` | Log to stderr (including failed TLS handshakes and bad HTTP requests). |
 
-Channel refusals use the spec's codes: `4010` (profile not `pipe/1`, no target, or target not allowed) and `4500` (target unreachable).
+Channel refusals use the spec's codes: `4010` (profile not `pipe/1`, no target, target not allowed, or too many processes) and `4500` (target unreachable).
+
+### Allow-list patterns
+
+A pattern is an endpoint address in which `*` (any run of characters) and `?` (one character) may appear. It's matched field by field, not as one string:
+
+- **`tcp:` and `tls:`.** The host and port are matched separately.
+  - Wildcards never match a `.`, so `*.example.com` matches `api.example.com` but not `a.b.example.com`.
+  - A host made only of digits, dots and wildcards, or containing a `:`, is an **IP pattern**. It matches IP literals only, never a DNS name: `10.0.0.*` matches `10.0.0.7` but not a name such as `10.0.0.7.example.net`.
+  - IPv6 works: `tcp:[::1]:*`. Exact IPs compare by value, so `[0:0::1]` matches `[::1]`.
+  - A host of `*` alone matches any host.
+  - Ports must be numbers from 1 to 65535.
+- **`unix:`.** Wildcards stay within one path segment. Patterns and target paths must be absolute, and targets must already be clean, with no `..`, `.`, `//` or trailing `/`. On Linux, abstract names (`@name`) are the exception to "absolute", and must be clean in the same way. On other systems an `@` path is relative, so it is refused.
+- **`exec:`.** Matched exactly. `serve` refuses to start if an `exec:` pattern has a wildcard: the command runs through `sh -c`, so a wildcard would let a peer append shell syntax.
+- There are no character classes: `[` and `]` are literal.
+
+Name patterns trust DNS: `tcp:*.corp.example:*` allows whatever those names resolve to.
 
 ## `xumcat ping [flags] XUMUX-URL`
 
