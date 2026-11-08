@@ -1,6 +1,7 @@
 package endpoint
 
 import (
+	"net/netip"
 	"path"
 	"strings"
 	"testing"
@@ -34,7 +35,7 @@ func FuzzMatch(f *testing.F) {
 	for _, c := range [][2]string{
 		{"tcp:10.0.0.*:22", "tcp:10.0.0.5:22"}, {"tcp:*.example.com:443", "tcp:a.example.com:443"},
 		{"unix:/run/*/a.sock", "unix:/run/x/a.sock"}, {"exec:cat", "exec:cat"}, {"tcp:[::1]:*", "tcp:[::1]:8080"},
-		{"tcp:*:*", "tcp:host:1"}, {"unix:@x*", "unix:@x1"},
+		{"tcp:*:*", "tcp:host:1"}, {"unix:@x*", "unix:@x1"}, {"tcp:[fe80::1%eth0]:*", "tcp:[fe80::1%eth0]:22"},
 	} {
 		f.Add(c[0], c[1])
 	}
@@ -57,7 +58,7 @@ func FuzzMatch(f *testing.F) {
 				t.Fatalf("unclean unix path %q matched %q", a.Path, pattern)
 			}
 		case "tcp", "tls":
-			if isIPPattern(p.Host) && p.Host != "*" && strings.Trim(a.Host, "0123456789.:abcdefABCDEF%") != "" {
+			if _, err := netip.ParseAddr(a.Host); err != nil && isIPPattern(p.Host) && p.Host != "*" {
 				t.Fatalf("IP pattern %q matched non-IP host %q", p.Host, a.Host)
 			}
 			if p.Host != "*" && strings.Count(p.Host, ".") != strings.Count(strings.TrimSuffix(a.Host, "."), ".") && !strings.Contains(p.Host, ":") {

@@ -46,7 +46,10 @@ test/e2e: go/build ## xumcat <-> xumcat end-to-end tests with real processes (E2
 
 test/fuzz: ## Fuzz every target (FUZZTIME per target, default 30s)
 	@for pkg in ./xumux ./endpoint; do \
-	  for f in $$(go test -list '^Fuzz' $$pkg | grep '^Fuzz'); do \
+	  list=$$(go test -list '^Fuzz' $$pkg) || { echo "$$list"; echo "cannot list fuzz targets in $$pkg"; exit 1; }; \
+	  targets=$$(echo "$$list" | grep '^Fuzz'); \
+	  [ -n "$$targets" ] || { echo "no fuzz targets in $$pkg"; exit 1; }; \
+	  for f in $$targets; do \
 	    echo "== $$pkg $$f"; \
 	    go test -run '^$$' -fuzz "^$$f$$" -fuzztime $(FUZZTIME) $$pkg || exit 1; \
 	  done; \
