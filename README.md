@@ -55,7 +55,7 @@ See [docs/usage.md](docs/usage.md) for every flag.
 ## Security
 
 - **`serve` connects only to targets you allow.** `-allow` takes endpoint patterns with `*` and `?` wildcards (`tcp:localhost:*`, `tcp:10.0.0.?:22`, `unix:/run/app/*.sock`), matched field by field ([details](docs/usage.md#allow-list-patterns)). With no `-allow` and no `-default`, `serve` refuses to start. An unrestricted allow-list turns the server into an open proxy. `exec:` patterns must be exact commands, and allowing one lets clients run that command.
-- **Limits.** `serve` handles at most 256 connections (`-max-conns`) and 64 running `exec:` targets (`-max-procs`) at once, and each connection at most 1024 channels.
+- **Limits.** `serve` handles at most 256 connections (`-max-conns`) and 64 running `exec:` targets (`-max-procs`) at once, and each connection at most 1024 channels. A peer that stops reading while still sending frames that need replies is disconnected with `4004` once 1 MiB of replies is queued (`xumux.Options.MaxControlQueue`).
 - **`-token` / `-token-file`** puts a shared token in HELLO `auth`. The server compares it in constant time and refuses with `4000` otherwise. The client will not send a token over an unencrypted transport to a non-loopback host unless you pass `-plaintext-auth`. Use `wss://` or `tls+xumux://` (server: `-tls-cert`, `-tls-key`), or run over SSH with `exec+xumux:`.
 - `serve` warns when a network listener has no token.
 
