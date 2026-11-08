@@ -30,12 +30,6 @@ const (
 // CodeTargetUnreachable refuses a channel whose target cannot be reached.
 const CodeTargetUnreachable = lpipe.CodeTargetUnreachable
 
-// CodeBusy (4011 BUSY) refuses a connection or channel because a resource
-// shared across connections is exhausted: xumcat's -max-conns and
-// -max-procs limits. It moves to libxumux-go (xumux.CodeBusy) in a later
-// release.
-const CodeBusy = 4011
-
 // ResetError reports that the far end of the pipe failed.
 type ResetError = lpipe.ResetError
 
@@ -119,7 +113,7 @@ func (r *Responder) Acceptor() xumux.Acceptor {
 				release = func() { once.Do(func() { <-r.procs }) }
 			default:
 				r.logf("channel %d: refused %s (process limit %d reached)", req.ID, target, r.MaxProcs)
-				return nil, &xumux.Refusal{Code: CodeBusy, Reason: "too many processes running"}
+				return nil, &xumux.Refusal{Code: xumux.CodeBusy, Reason: "too many processes running"}
 			}
 		}
 		conn, err := dial(ctx, target)
