@@ -132,6 +132,7 @@ func TestWindowsSocketPaths(t *testing.T) {
 	}{
 		{`unix:C:\run\*.sock`, `unix:C:\run\a.sock`, true},
 		{`unix:C:\run\app\*`, `unix:C:\run\app\x`, true},
+		{`unix:C:\run\*.sock`, `unix:C:\run\..hidden.sock`, true}, // a name, not ".."
 		// A wildcard stays within one segment, and '/' is not a separator.
 		{`unix:C:\run\*.sock`, `unix:C:\run\sub\a.sock`, false},
 		{`unix:C:\run\*.sock`, `unix:C:\run\sub/a.sock`, false},
