@@ -172,7 +172,7 @@ scenario_auth() {
   (sleep 3 | "$X" stdio tcp+xumux://127.0.0.1:17602 -t tcp:127.0.0.1:17001 >/dev/null 2>&1 &)
   sleep 0.5
   out=$(echo hi | t 30 "$X" stdio tcp+xumux://127.0.0.1:17602 -t tcp:127.0.0.1:17001 2>&1); rc=$?
-  check "$rc:$(echo "$out" | grep -c 4004)" "1:1" "-max-conns 1: a second connection is refused with 4004"
+  check "$rc:$(echo "$out" | grep -c 4011)" "1:1" "-max-conns 1: a second connection is refused with 4011 (BUSY)"
 }
 
 scenario_ping() {

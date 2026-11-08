@@ -195,7 +195,7 @@ func TestMaxProcs(t *testing.T) {
 	_, err = Open(ctx(t), s, "b", "exec:cat")
 	var ce *xumux.CloseError
 	require.True(t, errors.As(err, &ce), "%v", err)
-	assert.Equal(t, xumux.CodeChannelRefused, ce.Code)
+	assert.Equal(t, CodeBusy, ce.Code)
 	assert.Contains(t, ce.Reason, "too many processes")
 
 	other, err := Open(ctx(t), s, "c", "tcp:echo:1")

@@ -11,7 +11,6 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"time"
 
 	xumux "github.com/deftai/libxumux-go"
 	lpipe "github.com/deftai/libxumux-go/pipe"
@@ -30,6 +29,12 @@ const (
 
 // CodeTargetUnreachable refuses a channel whose target cannot be reached.
 const CodeTargetUnreachable = lpipe.CodeTargetUnreachable
+
+// CodeBusy (4011 BUSY) refuses a connection or channel because a resource
+// shared across connections is exhausted: xumcat's -max-conns and
+// -max-procs limits. It moves to libxumux-go (xumux.CodeBusy) in a later
+// release.
+const CodeBusy = 4011
 
 // ResetError reports that the far end of the pipe failed.
 type ResetError = lpipe.ResetError
@@ -114,7 +119,7 @@ func (r *Responder) Acceptor() xumux.Acceptor {
 				release = func() { once.Do(func() { <-r.procs }) }
 			default:
 				r.logf("channel %d: refused %s (process limit %d reached)", req.ID, target, r.MaxProcs)
-				return nil, &xumux.Refusal{Code: xumux.CodeChannelRefused, Reason: "too many processes running"}
+				return nil, &xumux.Refusal{Code: CodeBusy, Reason: "too many processes running"}
 			}
 		}
 		conn, err := dial(ctx, target)
@@ -138,10 +143,6 @@ func errOrOK(err error) any {
 	}
 	return err
 }
-
-// failCloseWait bounds how long Relay waits for pipe.Conn's own close of a
-// failed channel.
-const failCloseWait = 2 * time.Second
 
 // Relay copies bytes between the pipe/1 channel ch and conn until both
 // directions have ended, then closes both. It returns nil after a clean
@@ -203,18 +204,10 @@ func Relay(ctx context.Context, ch *xumux.Channel, conn endpoint.Conn) error {
 	case err == nil:
 		_ = conn.CloseWrite() // the peer's EOF, after all its DATA
 	default:
-		result = err // a RESET, a protocol error, a closed channel
-		// pipe.Conn has closed the channel, or is closing it from a
-		// goroutine, with a code for the failure (1002 for a protocol
-		// error). Wait for that before the deferred p.Close, whose normal
-		// 1000 close would otherwise race it and could win.
-		defer func() {
-			select {
-			case <-ch.Done():
-			case <-ctx.Done():
-			case <-time.After(failCloseWait):
-			}
-		}()
+		// A RESET, a protocol error, a closed channel. After a RESET or a
+		// protocol error, the deferred p.Close closes the channel with the
+		// failure's code (1001 or 1002), not 1000.
+		result = err
 	}
 	// After stop, the conn -> pipe goroutine is not waited for: closing
 	// some conns (stdin) cannot interrupt a read already in progress, and

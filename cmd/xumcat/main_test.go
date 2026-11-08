@@ -10,6 +10,9 @@ import (
 	"testing"
 	"time"
 
+	xumux "github.com/deftai/libxumux-go"
+	"github.com/deftai/xumcat/pipe"
+	"github.com/deftai/xumcat/transport"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -267,4 +270,30 @@ func TestParseSizeAndWindowOptions(t *testing.T) {
 	assert.Equal(t, "67108864", c.maxWindow.String())
 	assert.Equal(t, "", (&size{}).String())
 	assert.Error(t, relay(context.Background(), []string{"-max-window", "lots", "stdio", "stdio+xumux"}))
+}
+
+func TestMaxConnsBusy(t *testing.T) {
+	url := startServe(t, "-max-conns", "1", "-default", "tcp:"+echo(t))
+	connect := func() (*xumux.Session, error) {
+		fc, err := transport.Dial(context.Background(), url, transport.Options{})
+		if err != nil {
+			return nil, err
+		}
+		s, _, err := xumux.Connect(context.Background(), fc, xumux.ClientConfig{}, xumux.Options{})
+		return s, err
+	}
+	// startServe's probe connections may hold the one slot for a moment.
+	var first *xumux.Session
+	require.Eventually(t, func() bool {
+		var err error
+		first, err = connect()
+		return err == nil
+	}, 2*time.Second, 10*time.Millisecond)
+	defer first.Close(context.Background(), xumux.CodeNormal, "")
+
+	_, err := connect()
+	var ce *xumux.CloseError
+	require.True(t, errors.As(err, &ce), "%v", err)
+	assert.Equal(t, pipe.CodeBusy, ce.Code)
+	assert.Contains(t, ce.Reason, "too many connections")
 }

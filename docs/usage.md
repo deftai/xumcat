@@ -31,11 +31,11 @@ Listens on each URL (`stdio+xumux` serves the one connection on stdin/stdout) an
 | `-tls-cert FILE`, `-tls-key FILE` | Certificate for `wss://` and `tls+xumux://` listeners. |
 | `-max-window SIZE` | Largest receive window one channel may grow to (default `16MiB`; `0` turns auto-tuning off). See [Receive windows](#receive-windows). |
 | `-conn-window SIZE` | Stop growing windows once their sum on a connection reaches this (default `64MiB`). |
-| `-max-conns N` | Serve at most N connections at once (default `256`; `0` = no limit). Others are refused during the handshake with `4004`. |
-| `-max-procs N` | Run at most N `exec:` targets at once, across all connections (default `64`; `0` = no limit). Others are refused with `4010`. |
+| `-max-conns N` | Serve at most N connections at once (default `256`; `0` = no limit). Others are refused during the handshake with `4011` (BUSY). |
+| `-max-procs N` | Run at most N `exec:` targets at once, across all connections (default `64`; `0` = no limit). Others are refused with `4011` (BUSY). |
 | `-v` | Log to stderr (including failed TLS handshakes and bad HTTP requests). |
 
-Channel refusals use the spec's codes: `4010` (profile not `pipe/1`, no target, target not allowed, or too many processes) and `4500` (target unreachable).
+Channel refusals use the spec's codes: `4010` (profile not `pipe/1`, no target, or target not allowed), `4011` (BUSY: too many processes running) and `4500` (target unreachable). `4011` means the server is at a limit shared with other connections, so the same request can succeed later; clients should wait and back off before retrying.
 
 ### Allow-list patterns
 

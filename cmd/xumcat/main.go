@@ -512,7 +512,7 @@ func serve(ctx context.Context, args []string) error {
 				// handshake deadline still bounds how long this can take.
 				c.logf("refused a connection: %d already open (-max-conns)", *maxConns)
 				busy := xumux.ServerConfig{Authorize: func(context.Context, *xumux.Hello) error {
-					return &xumux.Refusal{Code: xumux.CodeRateLimited, Reason: "server busy: too many connections"}
+					return &xumux.Refusal{Code: pipe.CodeBusy, Reason: "server busy: too many connections"}
 				}}
 				_, _, _ = xumux.Accept(ctx, fc, busy, c.options())
 				return
