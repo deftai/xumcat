@@ -28,7 +28,16 @@ cleanup() { for p in "${pids[@]:-}"; do kill "$p" 2>/dev/null; done; wait 2>/dev
 trap cleanup EXIT
 sha256() { if command -v sha256sum >/dev/null; then sha256sum | cut -d' ' -f1; else shasum -a 256 | cut -d' ' -f1; fi; }
 # t SECONDS CMD...: run CMD, killing it with SIGALRM (exit 142) if it takes longer.
-t() { perl -e '$s = shift; alarm $s; exec @ARGV or die "exec: $!"' "$@"; }
+# t SECONDS CMD...: run CMD, killing it (SIGKILL) if it outlives SECONDS. A bare
+# alarm before exec isn't enough: Go programs don't die on SIGALRM.
+t() {
+  perl -e '
+    my $s = shift; my $pid = fork // die "fork: $!";
+    if (!$pid) { exec @ARGV or die "exec: $!" }
+    local $SIG{ALRM} = sub { kill "KILL", $pid; waitpid $pid, 0; exit 124 };
+    alarm $s; waitpid $pid, 0; exit($? & 127 ? 128 + ($? & 127) : $? >> 8);
+  ' "$@"
+}
 bg() { "$@" & pids+=($!); }
 ok() { pass=$((pass+1)); printf '  PASS  %s\n' "$*"; }
 no() { fail=$((fail+1)); printf '  FAIL  %s\n' "$*"; }
@@ -150,6 +159,20 @@ scenario_auth() {
   check "$rc:$(echo "$out" | grep -c 4500)" "1:1" "unreachable target (4500)"
   out=$(echo hi | t 30 "$X" stdio tls+xumux://127.0.0.1:17102 -t tcp:127.0.0.1:17001 -token $TOKEN 2>&1); rc=$?
   check "$rc:$(echo "$out" | grep -ci certificate)" "1:1" "self-signed cert rejected without -insecure"
+
+  out=$(t 10 "$X" serve tcp+xumux://127.0.0.1:17601 -allow 'exec:echo *' 2>&1); rc=$?
+  check "$rc:$(echo "$out" | grep -c 'exact commands')" "2:1" "serve refuses to start with a wildcard exec: pattern"
+  bg "$X" serve tcp+xumux://127.0.0.1:17602 -allow 'tcp:127.0.0.*:17001' -max-conns 1 2>/dev/null
+  waitport 17602 || return
+  # Before the fix, the wildcard matched the name, and the dial failed later (4500).
+  out=$(echo hi | t 30 "$X" stdio tcp+xumux://127.0.0.1:17602 -t tcp:127.0.0.1.example.invalid:17001 2>&1); rc=$?
+  check "$rc:$(echo "$out" | grep -c 4010)" "1:1" "an IP pattern never matches a DNS name (4010, not dialed)"
+  out=$(echo hi | t 30 "$X" stdio tcp+xumux://127.0.0.1:17602 -t tcp:127.0.0.1:17001 2>&1)
+  check "$out" "hi" "the IP pattern still matches 127.0.0.1"
+  (sleep 3 | "$X" stdio tcp+xumux://127.0.0.1:17602 -t tcp:127.0.0.1:17001 >/dev/null 2>&1 &)
+  sleep 0.5
+  out=$(echo hi | t 30 "$X" stdio tcp+xumux://127.0.0.1:17602 -t tcp:127.0.0.1:17001 2>&1); rc=$?
+  check "$rc:$(echo "$out" | grep -c 4004)" "1:1" "-max-conns 1: a second connection is refused with 4004"
 }
 
 scenario_ping() {

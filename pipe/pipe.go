@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"sync"
 
 	"github.com/deftai/xumcat/endpoint"
@@ -54,6 +55,24 @@ type Responder struct {
 	Dial func(ctx context.Context, target string) (endpoint.Conn, error)
 	// Logf, if set, logs channel events.
 	Logf func(format string, args ...any)
+	// MaxProcs caps how many exec: targets run at once across every
+	// connection using this Responder (0: no limit).
+	MaxProcs int
+
+	once  sync.Once
+	procs chan struct{}
+}
+
+// procConn releases a process slot when the relay closes the conn.
+type procConn struct {
+	endpoint.Conn
+	release func()
+}
+
+func (c *procConn) Close() error {
+	err := c.Conn.Close()
+	c.release()
+	return err
 }
 
 func (r *Responder) logf(format string, args ...any) {
@@ -64,6 +83,11 @@ func (r *Responder) logf(format string, args ...any) {
 
 // Acceptor returns an xumux Acceptor that accepts pipe/1 channels.
 func (r *Responder) Acceptor() xumux.Acceptor {
+	r.once.Do(func() {
+		if r.MaxProcs > 0 {
+			r.procs = make(chan struct{}, r.MaxProcs)
+		}
+	})
 	return func(ctx context.Context, req xumux.ChannelRequest) (xumux.Handler, error) {
 		if p, _ := req.Metadata["profile"].(string); p != Profile {
 			return nil, &xumux.Refusal{Code: xumux.CodeChannelRefused, Reason: fmt.Sprintf("unsupported profile %q", p)}
@@ -88,11 +112,24 @@ func (r *Responder) Acceptor() xumux.Acceptor {
 				return endpoint.Dial(ctx, t, endpoint.Options{})
 			}
 		}
+		release := func() {}
+		if r.procs != nil && strings.HasPrefix(target, "exec:") {
+			select {
+			case r.procs <- struct{}{}:
+				var once sync.Once
+				release = func() { once.Do(func() { <-r.procs }) }
+			default:
+				r.logf("channel %d: refused %s (process limit %d reached)", req.ID, target, r.MaxProcs)
+				return nil, &xumux.Refusal{Code: xumux.CodeChannelRefused, Reason: "too many processes running"}
+			}
+		}
 		conn, err := dial(ctx, target)
 		if err != nil {
+			release()
 			r.logf("channel %d: %s unreachable: %v", req.ID, target, err)
 			return nil, &xumux.Refusal{Code: CodeTargetUnreachable, Reason: err.Error()}
 		}
+		conn = &procConn{Conn: conn, release: release}
 		r.logf("channel %d: connected to %s", req.ID, target)
 		return func(ch *xumux.Channel) {
 			err := Relay(ctx, ch, conn)

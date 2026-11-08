@@ -128,3 +128,36 @@ func TestRapidChannelIDReuseConcurrent(t *testing.T) {
 		cancel()
 	}
 }
+
+// If the connection ends while the Acceptor is still deciding, the handler it
+// returns must still run (on a closed channel), so it can release what the
+// Acceptor opened. Before, it was dropped, leaking the target.
+func TestHandlerRunsWhenConnectionEndsDuringAccept(t *testing.T) {
+	deciding, release := make(chan struct{}), make(chan struct{})
+	ran := make(chan *Channel, 1)
+	sopts := Options{PingInterval: -1, Acceptor: func(context.Context, ChannelRequest) (Handler, error) {
+		close(deciding)
+		<-release
+		return func(c *Channel) { ran <- c }, nil
+	}}
+	client, server := tcpPair(t, Options{PingInterval: -1}, sopts)
+	go func() {
+		_, _ = client.OpenChannel(context.Background(), ChannelSpec{Name: "x", Reliable: true, Ordered: true})
+	}()
+	<-deciding
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_ = client.Close(ctx, CodeNormal, "")
+	<-server.Done()
+	close(release)
+	select {
+	case c := <-ran:
+		select {
+		case <-c.Done():
+		default:
+			t.Fatal("handler got a channel that is not closed")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handler never ran: whatever the Acceptor opened leaks")
+	}
+}

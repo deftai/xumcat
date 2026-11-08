@@ -466,6 +466,13 @@ func Accept(ctx context.Context, conn FrameConn, cfg ServerConfig, opts Options)
 	}
 	if err := conn.WriteFrame(controlFrame(TypeWelcome, welcome)); err != nil {
 		conn.Close()
+		s.mu.Lock()
+		for _, a := range open {
+			if c := s.chans[a.req.ID]; c != nil {
+				s.discardHandlerLocked(c, a.handler)
+			}
+		}
+		s.mu.Unlock()
 		return nil, nil, err
 	}
 	s.start()
@@ -895,6 +902,9 @@ func (s *Session) onOpenChannelLocked(r ChannelRequest) error {
 		defer s.mu.Unlock()
 		delete(s.pendingRemote, r.ID)
 		if s.state != stateOpen {
+			if handler != nil {
+				s.discardHandlerLocked(s.newChannel(r, false, chanOpen), handler)
+			}
 			return
 		}
 		if refusal != nil {
@@ -908,6 +918,18 @@ func (s *Session) onOpenChannelLocked(r ChannelRequest) error {
 		go handler(c)
 	}()
 	return nil
+}
+
+// discardHandlerLocked runs an accepted channel's handler on a channel that
+// is already closed, because the connection ended before the channel could
+// open. The handler's normal cleanup then releases whatever the Acceptor
+// opened for it (a dialed connection, a started process).
+func (s *Session) discardHandlerLocked(c *Channel, h Handler) {
+	if c.closeInfo == nil {
+		c.closeInfo = &CloseError{Code: CodeGoingAway, Reason: "connection closed before the channel opened"}
+	}
+	s.finishChannelLocked(c)
+	go h(c)
 }
 
 // decide runs the Acceptor (not under the lock).
