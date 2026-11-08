@@ -11,8 +11,8 @@ import (
 	"strings"
 	"sync"
 
+	xumux "github.com/deftai/libxumux-go"
 	"github.com/deftai/xumcat/endpoint"
-	"github.com/deftai/xumcat/xumux"
 )
 
 // Profile is the metadata.profile value of a pipe/1 channel.

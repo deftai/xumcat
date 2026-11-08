@@ -24,8 +24,8 @@ import (
 
 	"github.com/coder/websocket"
 
+	xumux "github.com/deftai/libxumux-go"
 	"github.com/deftai/xumcat/endpoint"
-	"github.com/deftai/xumcat/xumux"
 )
 
 // Subprotocol is the WebSocket subprotocol of the xumux binding.

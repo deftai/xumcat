@@ -2,7 +2,7 @@
 
 `xumcat` is netcat/socat for [xumux](https://github.com/deftai/xumux): it relays byte streams over a xumux connection. One connection (WebSocket, TCP, TLS, a Unix socket, stdio or an SSH session) carries any number of streams side by side, each one a [`pipe/1`](https://github.com/deftai/xumux/blob/main/spec/profiles/pipe.md) channel with its own flow control.
 
-This repository also contains **`xumux`, a Go implementation of the xumux 0.2 core**. It was written from the spec independently of the TypeScript [libxumux](https://github.com/deftai/libxumux), passes the spec's [conformance vectors](https://github.com/deftai/xumux/tree/main/conformance), and is tested against libxumux in both directions.
+The xumux protocol itself is implemented by [libxumux-go](https://github.com/deftai/libxumux-go), a standalone Go module. It was written from the spec independently of the TypeScript [libxumux](https://github.com/deftai/libxumux) and is tested against it in both directions.
 
 > **Status:** xumux 0.2.0-draft. The wire format can still change before 1.0.
 
@@ -63,8 +63,8 @@ See [docs/usage.md](docs/usage.md) for every flag.
 
 ```go
 import (
+	xumux "github.com/deftai/libxumux-go"
 	"github.com/deftai/xumcat/transport"
-	"github.com/deftai/xumcat/xumux"
 )
 
 fc, _ := transport.Dial(ctx, "wss://example.com/xumux", transport.Options{})
@@ -78,11 +78,10 @@ msg, err := ch.Receive(ctx)           // io.EOF after a normal close
 rtt, err := ch.Ping(ctx)              // per-channel round-trip time
 ```
 
-A server uses `xumux.Accept` with an `Options.Acceptor`, which decides on every channel the peer opens. Packages:
+A server uses `xumux.Accept` with an `Options.Acceptor`, which decides on every channel the peer opens. The protocol core is [libxumux-go](https://github.com/deftai/libxumux-go); this repository adds:
 
 | Package | |
 |---|---|
-| [`xumux`](xumux) | Core protocol: framing, handshake, channels, flow control, fragmentation, probes, keepalive, close |
 | [`transport`](transport) | xumux URLs: dial and serve WebSocket, TCP, TLS, Unix, stdio, exec |
 | [`pipe`](pipe) | The `pipe/1` profile: `Open`, `Relay`, and an allow-listing `Responder` |
 | [`endpoint`](endpoint) | Endpoint addresses: parse, dial, listen, allow-list matching |
@@ -91,14 +90,9 @@ A server uses `xumux.Accept` with an `Options.Acceptor`, which decides on every 
 
 ```sh
 make check          # fmt, vet, race tests, coverage (≥75% per package)
-make test/interop LIBXUMUX_DIR=../libxumux   # against a built libxumux checkout
 make test/e2e       # xumcat <-> xumcat with real processes: transports, forwarding, flow control, auth
 make help
 ```
-
-`xumux/testdata/vectors.json` is copied from [`deftai/xumux` `conformance/vectors.json`](https://github.com/deftai/xumux/tree/main/conformance). Update it when the spec changes.
-
-**Not implemented yet:** the `webrtc-multichannel/1` and `session-resume/1` extensions, the WebRTC and QUIC bindings.
 
 ## License
 
